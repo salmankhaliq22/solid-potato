@@ -1,0 +1,8 @@
+# habibi
+.orchestrator/locks/
+.orchestrator/runs/
+.orchestrator/metrics.jsonl
+.env
+.env.*
+!.env.example
+!.env.sample

@@ -1,0 +1,6 @@
+{
+  "protected": [
+    "**/docs/decisions/D-*.md"
+  ],
+  "note": "Extra protected path patterns for this project. Agents never write them; the guard already protects secrets (.env, secrets/, *.pem, *.key), approvals/, .claude/, CLAUDE.md, .github/workflows/, this file, the installed helper scripts and the kit itself. Decision files are created only by scripts/decision_log.py. Only the owner edits this file."
+}
