@@ -5,5 +5,10 @@
       {"path": "snapshot", "read": "view", "write": "owner"}
     ]
   },
-  "user": {}
+  "user": {},
+  "mcp": {
+    "servers": [
+      {"server": "Claude Code Remote", "tools": ["list_sessions", "get_session", "list_repos"]}
+    ]
+  }
 }

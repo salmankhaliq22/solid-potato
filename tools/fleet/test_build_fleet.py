@@ -267,7 +267,8 @@ class Snapshots(unittest.TestCase):
                                versions={"alpha": 3})
         op, d = docs["alpha"]
         self.assertEqual(op, "update")
-        self.assertEqual(d, {"updated_at": NOW, "connected": False, "not_connected_reason": "no access"})
+        self.assertEqual(d, {"updated_at": NOW, "connected": False, "status": "Not connected",
+                                 "not_connected_reason": "no access"})
 
     def test_not_connected_without_existing_doc_is_full_set(self):
         docs, errs = self.snap({"alpha": {"not_connected.txt": "no access"}, "beta": {}}, versions={})

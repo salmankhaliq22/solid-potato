@@ -36,6 +36,14 @@ a{color:var(--accent)}
 details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px}
 .back{display:inline-block;margin-bottom:8px;font-size:14px}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:14px;margin-top:8px}
+.btn{cursor:pointer;font-family:inherit}
+.btn.danger{border-color:var(--bad);color:var(--bad)}
+.btn[disabled]{opacity:.5;cursor:default}
+.form{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;display:grid;gap:10px}
+.form label{display:grid;gap:3px;font-size:13px;color:var(--muted)}
+.form input[type=text]{font:inherit;font-size:15px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);min-width:0;width:100%}
+.form .cb{display:flex;gap:8px;align-items:center;color:var(--fg)}
+.err{color:var(--bad);font-size:13px}
 .kv dt{color:var(--muted)}.kv dd{margin:0;overflow-wrap:anywhere}
 </style>
 <div id="app"><div class="msg">Loading…</div></div>
@@ -45,7 +53,10 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
   'use strict';
   var L = window.FleetLogic;
   var app = document.getElementById('app');
-  var state = { db: undefined, isOwner: false, projects: null, snaps: null, meta: null, error: '', archivedOpen: false };
+  var state = { db: undefined, isOwner: false, projects: null, snaps: null, meta: null, error: '', archivedOpen: false,
+    userId: 'owner', formOpen: false, form: { name: '', repo: '', blurb: '', wait: false }, formErrors: {}, repos: null, reposNote: '',
+    confirming: '', notice: '', busy: false,
+    mcp: undefined, sess: { status: 'idle', infos: [], note: '', msg: '' }, otherOpen: false };
 
   // ---- tiny DOM helpers: data only ever goes in through textContent ----
   function el(tag, cls, text) {
@@ -70,6 +81,188 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
   function pill(text, cls) { return el('span', 'pill ' + (cls || 'muted'), text); }
   function message(text) { return add(el('div', 'msg'), el('div', '', text)); }
 
+  // One status pill: a not-connected project shows only "Not connected" (an old "Active" would contradict it).
+  function statusPills(box, c, s) {
+    if (c.notConnected || s.status === 'Not connected') add(box, pill('Not connected', 'bad'));
+    else add(box, pill(s.status || '—', statusClass(s.status)));
+    if (c.stale) add(box, pill('Stale', 'warn'));
+  }
+
+  // ---- owner actions (one write per click, never on load) ----
+  function writeProject(name, data, isNew, done) {
+    if (!state.db || !state.isOwner || state.busy) return;
+    state.busy = true; state.notice = ''; render();
+    var ref = state.db.doc('projects/' + name);
+    var p = isNew
+      ? ref.get().then(function (d) { if (d && d.exists) throw { code: 'exists' }; return ref.set(data); })
+      : ref.update(data);
+    p.then(function () { state.busy = false; done(); render(); }, function (e) {
+      state.busy = false;
+      state.notice = e && e.code === 'exists' ? 'A project called ' + name + ' already exists.' : L.writeErrorText(e);
+      render();
+    });
+  }
+
+  function submitForm() {
+    var f = state.form;
+    var names = (state.projects || []).map(function (p) { return p.id; });
+    var r = L.validateProjectForm({ name: f.name, repo: f.repo, blurb: f.blurb, allOpenPrsWait: f.wait }, names, Date.now(), state.userId);
+    state.formErrors = r.errors;
+    if (!r.ok) { render(); return; }
+    writeProject(r.name, r.doc, true, function () {
+      state.formOpen = false; state.form = { name: '', repo: '', blurb: '', wait: false };
+      state.notice = 'Added ' + r.name + '. It shows “Waiting for first refresh” until you say “update the dashboard”.';
+    });
+  }
+
+  function loadRepos() {
+    if (state.repos !== null || !state.mcp) { if (!state.mcp) state.reposNote = 'Type the repo as owner/repo.'; return; }
+    state.repos = [];
+    state.mcp.callTool(L.SERVER, 'list_repos', { limit: 100 }, { cache: false }).then(function (res) {
+      state.repos = L.repoNames(L.unwrapPayload(res));
+      state.reposNote = state.repos.length ? '' : 'No repos were listed. Type the repo as owner/repo.';
+      render();
+    }, function () { state.reposNote = 'The repo list is not available. Type the repo as owner/repo.'; render(); });
+  }
+
+  function addForm() {
+    var f = state.form, box = el('div', 'form');
+    function input(label, key, ph, listId) {
+      var l = el('label', '', label), i = el('input'); i.type = 'text'; i.value = f[key]; i.placeholder = ph || '';
+      if (listId) i.setAttribute('list', listId);
+      i.addEventListener('input', function () { f[key] = i.value; });
+      add(l, i);
+      if (state.formErrors[key]) add(l, el('span', 'err', state.formErrors[key]));
+      return l;
+    }
+    add(box, input('Project name (lowercase, digits, dashes)', 'name', 'my-project'));
+    var rl = input('GitHub repo (owner/repo)', 'repo', 'owner/repo', 'repo-list');
+    if (state.repos && state.repos.length) {
+      var dl = el('datalist'); dl.id = 'repo-list';
+      state.repos.forEach(function (n) { var o = el('option'); o.value = n; add(dl, o); });
+      add(rl, dl);
+    }
+    if (state.reposNote) add(rl, el('span', 'small muted', state.reposNote));
+    add(box, rl);
+    add(box, input('One-line description', 'blurb', ''));
+    var cl = el('label', 'cb'), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!f.wait;
+    cb.addEventListener('change', function () { f.wait = cb.checked; });
+    add(cl, cb, el('span', '', 'Every open PR needs my OK'));
+    add(box, cl);
+    var b = el('div', 'btns');
+    var go = el('button', 'btn primary', 'Add project'); go.type = 'button'; go.disabled = state.busy;
+    go.addEventListener('click', submitForm);
+    var no = el('button', 'btn', 'Cancel'); no.type = 'button';
+    no.addEventListener('click', function () { state.formOpen = false; state.formErrors = {}; render(); });
+    add(b, go, no); add(box, b);
+    return box;
+  }
+
+  function archiveControls(name, archived) {
+    var b = el('div', 'btns');
+    if (archived) {
+      var u = el('button', 'btn', 'Unarchive'); u.type = 'button'; u.disabled = state.busy;
+      u.addEventListener('click', function () { writeProject(name, { archived: false }, false, function () { state.notice = 'Unarchived ' + name + '.'; }); });
+      return add(b, u);
+    }
+    if (state.confirming === name) {
+      add(b, el('span', 'small', 'Archive ' + name + '? It leaves the overview and the refresh skips it.'));
+      var y = el('button', 'btn danger', 'Archive'); y.type = 'button'; y.disabled = state.busy;
+      y.addEventListener('click', function () {
+        writeProject(name, { archived: true }, false, function () { state.confirming = ''; state.notice = 'Archived ' + name + '.'; location.hash = ''; });
+      });
+      var n = el('button', 'btn', 'Cancel'); n.type = 'button';
+      n.addEventListener('click', function () { state.confirming = ''; render(); });
+      return add(b, y, n);
+    }
+    var a = el('button', 'btn', 'Archive project'); a.type = 'button';
+    a.addEventListener('click', function () { state.confirming = name; state.notice = ''; render(); });
+    return add(b, a);
+  }
+
+  // ---- live sessions (fetched once on load; "Refresh sessions" fetches again) ----
+  function loadSessions() {
+    var S = state.sess;
+    if (!state.mcp) return;
+    if (S.status === 'loading') return;
+    S.status = 'loading'; S.msg = ''; render();
+    state.mcp.callTool(L.SERVER, 'list_sessions', { limit: 30, mine: true }, { cache: false }).then(function (res) {
+      var listed = L.unwrapPayload(res);
+      if (!listed || !Array.isArray(listed.data)) throw { code: 'bad_shape' };
+      var pick = L.pickSessions(listed, Date.now(), 20), failed = 0;
+      return Promise.all(pick.picked.map(function (row) {
+        return state.mcp.callTool(L.SERVER, 'get_session', { session_id: row.id }, { cache: false }).then(
+          function (r) { var d = L.unwrapPayload(r); return d ? L.sessionInfo(d, row) : (failed++, null); },
+          function () { failed++; return null; });
+      })).then(function (infos) {
+        S.infos = infos.filter(Boolean); S.status = 'ready';
+        S.note = [pick.skippedByCap ? pick.skippedByCap + ' older sessions not checked' : '', failed ? failed + ' sessions could not be read' : ''].filter(Boolean).join(' · ');
+        S.at = Date.now();
+        render();
+      });
+    }).catch(function (e) { S.status = 'error'; S.infos = []; S.msg = L.mcpErrorText(e); render(); });
+  }
+
+  function sessionRow(x) {
+    var r = el('div', 'row'), top = el('div', 'top');
+    add(top, pill(L.bucketLabel(x.bucket), L.bucketClass(x.bucket)), link(L.sessionHref(x.id), x.title || x.id, 'title'));
+    add(r, top);
+    add(r, el('div', 'small muted', [x.branch ? 'Branch ' + x.branch : '', x.updated_at ? 'Updated ' + when(x.updated_at) : ''].filter(Boolean).join(' · ')));
+    return r;
+  }
+
+  function refreshButton() {
+    var b = el('button', 'btn', state.sess.status === 'loading' ? 'Loading…' : 'Refresh sessions'); b.type = 'button';
+    b.disabled = state.sess.status === 'loading';
+    b.addEventListener('click', loadSessions);
+    return b;
+  }
+
+  // Shared status line for both session views; returns true when the list can be shown.
+  function sessionsReady(box) {
+    var S = state.sess;
+    if (state.mcp === undefined) { add(box, el('div', 'small muted', 'Checking the Claude Code Remote connector…')); return false; }
+    if (state.mcp === null) { add(box, el('div', 'small muted', 'Live sessions are not shown: the Claude Code Remote connector is not available or was not allowed. The rest of the page works.')); return false; }
+    if (S.status === 'error') { add(box, el('div', 'small warn', S.msg)); return false; }
+    if (S.status === 'loading' && !S.infos.length) { add(box, el('div', 'small muted', 'Loading sessions…')); return false; }
+    return true;
+  }
+
+  function sessionsPanel(c) {
+    var box = el('div');
+    add(box, el('h2', '', 'Live sessions'));
+    var ok = sessionsReady(box);
+    if (ok) {
+      var g = L.groupSessions(state.sess.infos, [{ name: c.name, repo: c.repo }]).byProject[c.name] || [];
+      var list = el('div', 'list');
+      if (!g.length) add(list, el('div', 'small muted', 'No Claude sessions are working on this project.'));
+      g.forEach(function (x) { add(list, sessionRow(x)); });
+      add(box, list);
+      if (state.sess.note) add(box, el('div', 'small muted', state.sess.note));
+    }
+    if (state.mcp) add(box, add(el('div', 'btns'), refreshButton()));
+    return box;
+  }
+
+  function otherSessions(groups) {
+    var d = el('details'); d.open = state.otherOpen;
+    d.addEventListener('toggle', function () { state.otherOpen = d.open; });
+    var other = null, ok;
+    var inner = el('div');
+    ok = sessionsReady(inner);
+    if (ok) {
+      other = L.groupSessions(state.sess.infos, groups.active.map(function (c) { return { name: c.name, repo: c.repo }; })).other;
+      var list = el('div', 'list');
+      if (!other.length) add(list, el('div', 'small muted', 'Every recent session belongs to a project above.'));
+      other.forEach(function (x) { add(list, sessionRow(x)); });
+      add(inner, list);
+      if (state.sess.note) add(inner, el('div', 'small muted', state.sess.note));
+    }
+    if (state.mcp) add(inner, add(el('div', 'btns'), refreshButton()));
+    add(d, el('summary', '', 'Other sessions' + (other ? ' (' + other.length + ')' : '')), inner);
+    return d;
+  }
+
   // ---- overview ----
   function card(c) {
     var a = el('a', 'card');
@@ -80,11 +273,9 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
     if (c.blurb) add(a, el('div', 'small muted', c.blurb));
     if (!s) { add(a, el('div', 'small warn', 'Waiting for first refresh')); return a; }
     var pills = el('div');
-    add(pills, pill(s.status || '—', statusClass(s.status)));
-    if (c.notConnected) add(pills, pill('Not connected', 'bad'));
-    if (c.stale) add(pills, pill('Stale', 'warn'));
+    statusPills(pills, c, s);
     add(a, pills);
-    if (c.notConnected) add(a, el('div', 'small bad', L.notConnectedText(c.repo)));
+    if (c.notConnected) add(a, el('div', 'small bad', L.notConnectedText(c.repo, s.not_connected_reason)));
     var st = el('div', 'stats');
     [['waiting_on_you', 'waiting'], ['open_pr_count', 'open PRs'], ['open_issue_count', 'issues'], ['merged_7d', 'merged/wk']].forEach(function (p) {
       add(st, add(el('div'), el('b', '', s[p[0]] == null ? '—' : s[p[0]]), el('span', '', p[1])));
@@ -106,7 +297,15 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
     var root = el('div');
     add(root, el('h1', '', 'Project Fleet'));
     add(root, el('div', 'small muted', state.meta && state.meta.updated_at ? 'Data as of ' + when(state.meta.updated_at) : 'No refresh yet — say "update the dashboard".'));
-    // PR 2 hook: Add project button (owner only) goes here.
+    if (state.notice) add(root, el('div', 'small', state.notice));
+    if (state.isOwner && state.db) {
+      if (state.formOpen) add(root, addForm());
+      else {
+        var ab = el('button', 'btn primary', 'Add project'); ab.type = 'button'; ab.style.marginTop = '10px';
+        ab.addEventListener('click', function () { state.formOpen = true; state.notice = ''; state.formErrors = {}; loadRepos(); render(); });
+        add(root, ab);
+      }
+    }
     var t = L.totals(groups.active), tiles = el('div', 'totals');
     [['projects', 'projects'], ['waiting', 'waiting on you'], ['openPrs', 'open PRs'], ['openIssues', 'open issues'], ['merged7d', 'merged this week']].forEach(function (p) {
       add(tiles, add(el('div', 'tile'), el('b', '', t[p[0]]), el('span', '', p[1])));
@@ -124,7 +323,7 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
     groups.active.forEach(function (c) { add(grid, card(c)); });
     add(root, grid);
 
-    // PR 2 hook: "Other sessions" (collapsed) goes here.
+    add(root, otherSessions(groups));
     if (groups.archived.length) {
       var d = el('details'); d.open = state.archivedOpen;
       d.addEventListener('toggle', function () { state.archivedOpen = d.open; });
@@ -134,8 +333,9 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
         var r = el('div', 'row'), top = el('div', 'top');
         var a = el('a', 'title', c.name); a.href = '#p-' + c.name;
         add(top, a, el('span', 'small muted', c.repo));
-        // PR 2 hook: Unarchive button (owner only).
-        add(r, top); add(al, r);
+        add(r, top);
+        if (state.isOwner) add(r, archiveControls(c.name, true));
+        add(al, r);
       });
       add(d, al); add(root, d);
     }
@@ -169,14 +369,20 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
     if (c.project && c.project.archived) add(root, el('div', 'small muted', 'Archived'));
     if (c.repo) add(root, add(el('div', 'small muted'), link('https://github.com/' + c.repo, c.repo)));
     if (c.blurb) add(root, el('div', 'small muted', c.blurb));
-    if (!s) { add(root, message('Waiting for first refresh')); return root; }
+    if (state.notice) add(root, el('div', 'small', state.notice));
+    if (!s) {
+      add(root, message('Waiting for first refresh'));
+      add(root, sessionsPanel(c));
+      if (state.isOwner && c.project && !c.project.archived) add(root, archiveControls(c.name, false));
+      return root;
+    }
+    if (c.project && c.project.archived) add(root, el('div', 'small muted', 'Data from ' + (s.updated_at ? when(s.updated_at) : 'the last refresh') + ' — say “update the dashboard” to refresh after unarchiving.'));
 
     var pills = el('div'); pills.style.marginTop = '8px';
-    add(pills, pill(s.status || '—', statusClass(s.status)));
-    if (c.notConnected) add(pills, pill('Not connected', 'bad'));
-    if (c.stale) add(pills, pill('Stale', 'warn'));
+    statusPills(pills, c, s);
     add(root, pills);
-    if (c.notConnected) add(root, el('div', 'small bad', s.not_connected_reason ? L.notConnectedText(c.repo) + ' (' + s.not_connected_reason + ')' : L.notConnectedText(c.repo)));
+    if (c.notConnected) add(root, el('div', 'small bad', L.notConnectedText(c.repo, s.not_connected_reason)));
+    if (c.project && !c.project.archived && c.stale && s.updated_at) add(root, el('div', 'small muted', 'Data from ' + when(s.updated_at) + ' — say “update the dashboard” to refresh.'));
     var kv = el('dl', 'kv');
     [['Last activity', s.last_activity_at ? when(s.last_activity_at) : ''], ['Stage', s.stage], ['Next step', s.next_step], ['Blockers', s.blockers]].forEach(function (p) {
       if (p[1]) add(kv, el('dt', '', p[0]), el('dd', '', p[1]));
@@ -219,9 +425,9 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
     });
     add(root, al);
 
-    // PR 2 hook: Live sessions panel (list_sessions) goes here.
+    add(root, sessionsPanel(c));
     add(root, el('div', 'small muted', s.updated_at ? 'Data as of ' + when(s.updated_at) : ''));
-    // PR 2 hook: Archive button (owner only).
+    if (state.isOwner && c.project) add(root, archiveControls(c.name, !!c.project.archived));
     return root;
   }
 
@@ -259,8 +465,17 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
   function start() {
     var c = window.claude;
     if (!c || typeof c.use !== 'function') { state.db = null; render(); return; }
-    c.use('user').then(function (u) { return u ? u.isOwner() : false; })
-      .then(function (o) { state.isOwner = !!o; render(); }, function () {});
+    c.use('user').then(function (u) {
+      if (!u) return false;
+      return u.isOwner().then(function (o) {
+        if (!o) return false;
+        return Promise.resolve(typeof u.id === 'function' ? u.id() : null).then(function (id) { if (id) state.userId = String(id); return true; }, function () { return true; });
+      });
+    }).then(function (o) { state.isOwner = !!o; render(); }, function () {});
+    c.use('mcp').then(function (m) {
+      state.mcp = m || null;
+      if (m) loadSessions(); else render();
+    }, function () { state.mcp = null; render(); });
     c.use('db').then(function (db) {
       state.db = db || null;
       if (!db) { render(); return; }

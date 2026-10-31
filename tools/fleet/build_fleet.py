@@ -419,7 +419,8 @@ def build_snapshots(dumps, plist, config, now, versions=None):
                             "(written as not connected)" % name)
         if reason is not None:
             if name in versions:
-                docs[name] = ("update", {"updated_at": stamp, "connected": False, "not_connected_reason": reason})
+                docs[name] = ("update", {"updated_at": stamp, "connected": False, "status": "Not connected",
+                                     "not_connected_reason": reason})
             else:
                 docs[name] = ("set", not_connected_doc(p, reason, stamp))
             continue

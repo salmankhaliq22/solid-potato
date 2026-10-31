@@ -11,7 +11,7 @@ Use when the owner says "update the dashboard". Two dashboards exist:
 
     python tools/fleet/build_control.py     # writes tools/fleet/dist/control.html (logic inlined)
 
-Publishing is an owner gate. Publish `tools/fleet/dist/control.html` with `capabilities` set to the contents of `tools/fleet/control.capabilities.json` (database writable by the owner only on `projects/` and `snapshot/`; `user` for the owner check).
+Publishing is an owner gate. Publish `tools/fleet/dist/control.html` with `capabilities` set to the contents of `tools/fleet/control.capabilities.json` (database writable by the owner only on `projects/` and `snapshot/`; `user` for the owner check; `mcp` limited to the Claude Code Remote connector tools `list_sessions`, `get_session`, `list_repos`, for the Live sessions panel and the repo picker). Always pass the whole file, or the page loses a capability. The page writes `projects/` (owner clicks Add, Archive, Unarchive); the refresh still owns `snapshot/` and the page never writes it.
 
 ## 1. Seed the projects (once, after first publish)
 
@@ -58,7 +58,9 @@ Open the page (`action: open`) and confirm the cards show "Data as of" today. Th
 
 ## Adding or archiving a project
 
-In PR 1 the page is read-only: add a project by `ArtifactData` `set` on `projects/<name>` with `{repo, blurb, archived: false, all_open_prs_wait, added_at, added_by}` (name matches `^[a-z0-9-]+$`, repo `owner/repo`), and archive by `update` with `{archived: true}`. `all_open_prs_wait: true` (used for `resd`) lists every open non-draft PR without another waiting label as "merge-needs-you". The page buttons arrive in the next PR.
+The owner does this on the page: "Add project" on the overview (name, repo, description, "Every open PR needs my OK"), "Archive project" on a project page (asks first), "Unarchive" in the archived list. Each click is one write to `projects/<name>`; nobody else sees the buttons and the database refuses their writes. A new project shows "Waiting for first refresh" until the next "update the dashboard". The manual route still works: `ArtifactData` `set` on `projects/<name>` with `{repo, blurb, archived: false, all_open_prs_wait, added_at, added_by}`, or `update` with `{archived: true}`.
+
+Live sessions need the viewer to allow the Claude Code Remote connector; if they do not, the page says so and everything else works.
 
 ## Tests
 

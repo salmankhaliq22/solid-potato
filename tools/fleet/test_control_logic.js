@@ -119,4 +119,100 @@ t('empty', () => {
   assert.deepStrictEqual(g, { active: [], archived: [] });
   assert.strictEqual(L.totals([]).projects, 0);
 });
+
+t('not connected text and waiting', () => {
+  assert.strictEqual(L.notConnectedText('o/r', 'No data was fetched for this project (refresh skipped it)'),
+    'Not connected — No data was fetched for this project (refresh skipped it)');
+  assert.ok(!/grant/.test(L.notConnectedText('o/r', 'No data was fetched for x')));
+  assert.strictEqual(L.notConnectedText('o/r', 'no access'), 'Not connected — grant the Claude GitHub app access to o/r (no access)');
+  const projects = [{ id: 'a', repo: 'o/a' }, { id: 'b', repo: 'o/b' }];
+  const w = { key: 'x#1', why: 'Needs OK', age_days: 1 };
+  const snaps = { a: { connected: false, waiting: [w] }, b: { connected: true, waiting: [Object.assign({}, w, { key: 'y#1' })] } };
+  const g = L.groupProjects(projects, snaps, null);
+  assert.deepStrictEqual(L.waitingAll(g.active).map(x => x.key), ['y#1']);
+});
+t('validateProjectForm', () => {
+  const ok = L.validateProjectForm({ name: 'my-proj', repo: 'o/r.x-1', blurb: ' hi ', allOpenPrsWait: true }, ['a'], Date.UTC(2026, 9, 31), 'u1');
+  assert.ok(ok.ok);
+  assert.strictEqual(ok.name, 'my-proj');
+  assert.deepStrictEqual(ok.doc, { repo: 'o/r.x-1', blurb: 'hi', archived: false, all_open_prs_wait: true, added_at: '2026-10-31T00:00:00.000Z', added_by: 'u1' });
+  assert.strictEqual(L.validateProjectForm({ name: 'a', repo: 'o/r' }, ['a']).errors.name.indexOf('already exists') >= 0, true);
+  ['My', 'a b', '', 'a_b', 'a/b'].forEach(n => assert.ok(L.validateProjectForm({ name: n, repo: 'o/r' }, []).errors.name, n));
+  ['', 'o', 'o/', '/r', 'o/r/x', 'o r/x', 'https://github.com/o/r'].forEach(r => assert.ok(L.validateProjectForm({ name: 'n', repo: r }, []).errors.repo, r));
+  const d = L.validateProjectForm({ name: 'n', repo: 'o/r' }, [], 0).doc;
+  assert.strictEqual(d.all_open_prs_wait, false);
+  assert.strictEqual(d.added_by, 'owner');
+  assert.strictEqual(L.writeErrorText({ code: 'not_granted' }).indexOf('owner') >= 0, true);
+});
+t('unwrapPayload', () => {
+  const obj = { data: [{ id: 'session_a' }] };
+  assert.deepStrictEqual(L.unwrapPayload(obj), obj);
+  assert.deepStrictEqual(L.unwrapPayload({ ccr: obj }), obj);
+  assert.deepStrictEqual(L.unwrapPayload({ payload: obj, content: [] }), obj);
+  assert.deepStrictEqual(L.unwrapPayload({ payload: { ccr: obj } }), obj);
+  assert.deepStrictEqual(L.unwrapPayload({ structuredContent: obj }), obj);
+  assert.deepStrictEqual(L.unwrapPayload({ content: [{ type: 'text', text: JSON.stringify(obj) }] }), obj);
+  assert.deepStrictEqual(L.unwrapPayload([{ type: 'text', text: JSON.stringify({ ccr: obj }) }]), obj);
+  assert.deepStrictEqual(L.unwrapPayload({ payload: JSON.stringify(obj) }), obj);
+  assert.strictEqual(L.unwrapPayload({ payload: 'not json' }), null);
+  assert.strictEqual(L.unwrapPayload(null), null);
+  assert.strictEqual(L.unwrapPayload([]), null);
+});
+t('normRepo', () => {
+  assert.strictEqual(L.normRepo('https://github.com/Owner/Repo.git'), 'owner/repo');
+  assert.strictEqual(L.normRepo('https://github.com/Owner/Repo'), 'owner/repo');
+  assert.strictEqual(L.normRepo('Owner/Repo'), 'owner/repo');
+  assert.strictEqual(L.normRepo('Owner/Repo.git/'), 'owner/repo');
+  assert.strictEqual(L.normRepo(null), '');
+});
+const NOW = Date.parse('2026-10-31T12:00:00Z');
+const B = 'SESSION_STATUS_BUCKET_';
+function mk(id, bucket, updated, status) { return { id, title: id, session_status: status || 'SESSION_STATUS_IDLE', status_bucket: B + bucket, updated_at: updated }; }
+t('pickSessions', () => {
+  const rows = [
+    mk('session_old', 'COMPLETED', '2026-10-20T00:00:00Z'),
+    mk('session_recentdone', 'COMPLETED', '2026-10-28T00:00:00Z'),
+    mk('session_arch', 'WORKING', '2026-10-31T00:00:00Z', 'SESSION_STATUS_ARCHIVED'),
+    mk('session_oldwork', 'WORKING', '2026-09-01T00:00:00Z'),
+    mk('session_new', 'WORKING', '2026-10-31T10:00:00Z')
+  ];
+  const r = L.pickSessions({ data: rows }, NOW);
+  assert.deepStrictEqual(r.picked.map(s => s.id), ['session_new', 'session_recentdone', 'session_oldwork']);
+  assert.strictEqual(L.pickSessions({ data: rows }, NOW, 1).skippedByCap, 2);
+  assert.deepStrictEqual(L.pickSessions(null, NOW).picked, []);
+  const many = [];
+  for (let i = 0; i < 30; i++) many.push(mk('session_' + i, 'WORKING', new Date(NOW - i * 60000).toISOString()));
+  const c = L.pickSessions({ data: many }, NOW);
+  assert.strictEqual(c.picked.length, 20);
+  assert.strictEqual(c.picked[0].id, 'session_0');
+  assert.strictEqual(c.skippedByCap, 10);
+});
+t('sessions grouping and links', () => {
+  const det = (id, url, branch, bucket) => ({ id, title: 't ' + id, status_bucket: B + bucket, updated_at: '2026-10-31T10:00:00Z',
+    session_context: { sources: [{ git_repository: { url, revision: 'main' } }] },
+    external_metadata: { current_branches: { 'salmankhaliq22/resd': branch } } });
+  const infos = [
+    L.sessionInfo(det('session_a', 'https://github.com/Salmankhaliq22/resd.git', 'feat-1', 'WORKING')),
+    L.sessionInfo(det('session_b', 'https://github.com/other/thing', 'x', 'BLOCKED')),
+    L.sessionInfo({ id: 'session_c', title: 'bare' }, { status_bucket: B + 'FAILED' })
+  ];
+  const g = L.groupSessions(infos, [{ name: 'resd', repo: 'salmankhaliq22/resd' }, { name: 'empty', repo: 'o/e' }]);
+  assert.deepStrictEqual(g.byProject.resd.map(s => s.id), ['session_a']);
+  assert.strictEqual(g.byProject.resd[0].branch, 'feat-1');
+  assert.deepStrictEqual(g.byProject.empty, []);
+  assert.deepStrictEqual(g.other.map(s => s.id).sort(), ['session_b', 'session_c']);
+  assert.strictEqual(L.bucketLabel(B + 'REVIEW_READY'), 'Review ready');
+  assert.strictEqual(L.bucketLabel('zzz'), 'Unknown');
+  assert.strictEqual(L.sessionHref('session_AbC123'), 'https://claude.ai/code/session_AbC123');
+  assert.strictEqual(L.sessionHref('session_a/../x'), null);
+  assert.strictEqual(L.sessionHref('abc'), null);
+  assert.strictEqual(L.sessionHref(undefined), null);
+});
+t('repoNames and mcpErrorText', () => {
+  assert.deepStrictEqual(L.repoNames({ repos: [{ full_name: 'b/x' }, { full_name: 'A/y' }, { full_name: 'b/x' }, { full_name: 'bad' }, {}] }), ['A/y', 'b/x']);
+  assert.deepStrictEqual(L.repoNames(null), []);
+  assert.ok(/sign in again/.test(L.mcpErrorText({ code: 'needs_reauth' })));
+  assert.ok(/not allowed/.test(L.mcpErrorText({ code: 'not_granted' })));
+  assert.ok(/could not be loaded/.test(L.mcpErrorText(new Error('x'))));
+});
 console.log('control_logic: ' + n + ' test groups passed');
