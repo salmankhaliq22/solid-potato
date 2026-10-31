@@ -82,6 +82,21 @@ class Build(Base):
         self.assertEqual(p["alpha"]["status"], "Idle")
         self.assertEqual(p["beta"]["status"], "Active")
 
+    def test_all_open_prs_wait(self):
+        global CFG
+        old = CFG
+        CFG = dict(old, projects=[dict(old["projects"][0], all_open_prs_wait=True)])
+        try:
+            p, w, _ = self.run_build({"alpha": {"prs.json": [
+                pr(1, None), pr(2, None, draft=True), pr(3, ["needs-owner"]), pr(4, ["internal"])]}})
+        finally:
+            CFG = old
+        by = {r["number"]: r for r in w}
+        self.assertEqual(sorted(by), [1, 3, 4])
+        self.assertEqual((by[1]["label"], by[1]["why"]), ("merge-needs-you", "Needs your OK to merge"))
+        self.assertEqual(by[3]["label"], "needs-owner")
+        self.assertEqual(p["alpha"]["waiting_on_you"], 3)
+
     def test_waiting_sort_and_internal(self):
         p, w, _ = self.run_build({"alpha": {
             "prs.json": [

@@ -44,7 +44,7 @@ Two lines: what is waiting on them (count and the oldest item), and anything not
 
 ## Adding a project
 
-Edit `tools/fleet/config.json` (name, repo, blurb) and attach the repo to the session (`add_repo`). Run the steps above.
+Edit `tools/fleet/config.json` (name, repo, blurb) and attach the repo to the session (`add_repo`). Optional `"all_open_prs_wait": true` on a project (used for `resd`, where nothing merges until the owner names the PR) lists every open non-draft PR without another waiting label as "merge-needs-you" and counts it in waiting_on_you. Run the steps above.
 
 ## Tests
 

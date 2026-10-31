@@ -61,6 +61,7 @@
         waiting_on_you: s('waiting_on_you'),
         open_prs: s('open_prs'),
         merged_7d: s('merged_7d'),
+        merged_7d_capped: projects.some(function (r) { return Boolean(String(r.merged_7d_capped) === 'true' || r.merged_7d_capped === true); }),
         active: projects.filter(function (r) { return r.status === 'Active'; }).length
       }];
     }
@@ -73,8 +74,9 @@
     [['waiting_on_you', 'Waiting on you'], ['open_prs', 'Open PRs'], ['merged_7d', 'Merged this week'], ['active', 'Active projects']]
       .forEach(function (t) {
         var tile = root.append('div').attr('class', 'pf-tile');
-        var big = tile.append('div').attr('class', 'pf-big').text(row ? String(num(row[t[0]])) : DASH);
-        mark(big, 'totals', t[0]).attr('data-row', '0');
+        var big = tile.append('div').attr('class', 'pf-big');
+        if (row && t[0] === 'merged_7d' && (String(row.merged_7d_capped) === 'true' || row.merged_7d_capped === true)) big.append('span').text('\u2265');
+        mark(big.append('span').text(row ? String(num(row[t[0]])) : DASH), 'totals', t[0]).attr('data-row', '0');
         tile.append('div').attr('class', 'pf-lbl').text(t[1]);
       });
   }
@@ -90,7 +92,8 @@
       var card = root.append('div').attr('class', 'pf-card');
       var head = card.append('div').attr('class', 'pf-cardhead');
       var nm = head.append('div').attr('class', 'pf-name');
-      var a = nm.append('a').attr('href', r.url).attr('target', '_blank').attr('rel', 'noopener').text(r.project);
+      var a = nm.append('a').attr('target', '_blank').attr('rel', 'noopener').text(r.project);
+      if (typeof r.url === 'string' && r.url.indexOf('https://') === 0) a.attr('href', r.url);
       mark(a, 'projects', 'project', w);
       var connected = String(r.connected) === 'true';
       var pill = head.append('span').attr('class', 'pf-pill ' + statusClass(r.status));
@@ -115,7 +118,9 @@
           .forEach(function (s) {
             var cell = stats.append('div').attr('class', 'pf-stat');
             var capped = s[0] === 'merged_7d' && String(r.merged_7d_capped) === 'true';
-            mark(cell.append('b').text((capped ? '\u2265' : '') + String(num(r[s[0]]))), 'projects', s[0], w);
+            var big = cell.append('b');
+            if (capped) big.append('span').text('\u2265');
+            mark(big.append('span').text(String(num(r[s[0]]))), 'projects', s[0], w);
             cell.append('span').text(s[1]);
           });
         if (r.stage || r.next_step) {

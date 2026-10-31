@@ -3,7 +3,7 @@
     {"name": "scifun", "repo": "salmankhaliq22/scifun", "blurb": "Science-learning app for Explorer and Guide"},
     {"name": "nightshift", "repo": "salmankhaliq22/nightshift", "blurb": "Overnight ticket worker plugin"},
     {"name": "habibi", "repo": "salmankhaliq22/habibi", "blurb": "Orchestrator kit plugin"},
-    {"name": "resd", "repo": "salmankhaliq22/resd", "blurb": ""},
+    {"name": "resd", "repo": "salmankhaliq22/resd", "blurb": "", "all_open_prs_wait": true},
     {"name": "oneblockatatime", "repo": "salmankhaliq22/oneblockatatime", "blurb": ""}
   ],
   "waiting_labels": ["needs-owner", "needs-parent", "owner-only", "HITL"],

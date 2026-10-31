@@ -188,6 +188,9 @@ def build(dumps, config, now):
                 title_hitl = not wlab and "[hitl]" in (it.get("title") or "").lower()
                 if title_hitl:
                     wlab = "HITL"
+                owner_merge = bool(p.get("all_open_prs_wait")) and kind == "PR" and not wlab and not it.get("draft")
+                if owner_merge:
+                    wlab = "merge-needs-you"
                 internal = kind == "PR" and has_label(labs, ["internal"]) and not it.get("draft")
                 if has_label(labs, ipl):
                     row["in_progress"] += 1
@@ -202,7 +205,7 @@ def build(dumps, config, now):
                     "key": "%s#%s" % (name, it.get("number")), "project": name, "kind": kind,
                     "number": it.get("number"), "title": clip(it.get("title", ""), 100),
                     "url": it.get("html_url", ""), "label": wlab or "internal",
-                    "why": "Needs your hands" if title_hitl else "Needs your decision" if wlab else "Ready to merge",
+                    "why": "Needs your hands" if title_hitl else "Needs your OK to merge" if owner_merge else "Needs your decision" if wlab else "Ready to merge",
                     "age_days": days_between(now, created) if created else 0,
                     "_w": 0 if wlab else 1,
                 })
