@@ -12,10 +12,10 @@ datasets (`projects`, `waiting`, `activity`) built from GitHub dumps by
 For every project in `config.json`, create `<S>/dumps/<name>/` and save, using the GitHub MCP tools:
 
 - `prs.json`: `list_pull_requests` state=open. Keep fields number, title, html_url, labels, draft, created_at, updated_at.
-- `merged.json`: `list_pull_requests` state=closed, sort=updated, direction=desc, perPage=30. Same fields plus merged_at, closed_at.
+- `merged.json`: `list_pull_requests` state=closed, sort=updated, direction=desc, perPage=30, then page=2, 3, ... until the oldest `updated_at` on the last page is older than 7 days (a busy repo can have 30+ merges in a week). Concatenate all pages into one `merged.json`. Same fields plus merged_at, closed_at. If the builder warns that `merged_7d` may be undercounted, fetch more pages.
 - `issues.json`: `list_issues` state=OPEN. Keep number, title, labels, created_at, updated_at. GitHub issue lists can include PRs; the builder drops any issue whose number is in `prs.json` or `merged.json`, so dump both PR files first.
 - `commits.json`: `list_commits` perPage=30 on the default branch. Keep sha, html_url, commit (message and author date). Newest first.
-- `state.md` and `handoff.md`: `get_file_contents` for `.orchestrator/STATE.md` and `.orchestrator/HANDOFF.md`, only if they exist.
+- `state.md`: `get_file_contents` for `.orchestrator/STATE.md`, only if it exists.
 
 A repo the session cannot reach gets no folder; it shows as "Not connected". Issues or PRs with `[HITL]` in the title count as waiting on the owner.
 

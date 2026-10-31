@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from datetime import datetime, timedelta, timezone
 
 WRAP_KEYS = ("items", "issues", "pull_requests", "data")
@@ -136,7 +137,7 @@ def build(dumps, config, now):
             "blurb": p.get("blurb", ""), "connected": False, "status": "Not connected",
             "last_activity_at": "", "last_activity_days": -1, "last_commit_msg": "",
             "open_prs": 0, "waiting_on_you": 0, "ready_internal": 0, "open_issues": 0,
-            "in_progress": 0, "merged_7d": 0, "stage": "", "next_step": "", "blockers": "",
+            "in_progress": 0, "merged_7d": 0, "merged_7d_capped": False, "stage": "", "next_step": "", "blockers": "",
         }
         if not os.path.isdir(folder):
             projects.append(row)
@@ -153,14 +154,21 @@ def build(dumps, config, now):
 
         stamps = []
         cinfos = [commit_info(c) for c in commits]
-        if cinfos:
+        dated = [ci for ci in cinfos if ci[0]]
+        if dated:
+            newest = max(dated, key=lambda ci: ci[0])
+            row["last_commit_msg"] = clip(newest[1], 90)
+            stamps.append(newest[0])
+        elif cinfos:
             row["last_commit_msg"] = clip(cinfos[0][1], 90)
-        stamps += [ci[0] for ci in cinfos[:1] if ci[0]]
-        for x in prs + merged:
-            for k in ("updated_at", "merged_at"):
-                dt = parse_ts(x.get(k))
-                if dt:
-                    stamps.append(dt)
+        for x in prs:
+            dt = parse_ts(x.get("updated_at"))
+            if dt:
+                stamps.append(dt)
+        for x in merged:
+            dt = parse_ts(x.get("merged_at"))
+            if dt:
+                stamps.append(dt)
         if stamps:
             last = max(stamps)
             d = days_between(now, last)
@@ -183,7 +191,7 @@ def build(dumps, config, now):
                 internal = kind == "PR" and has_label(labs, ["internal"]) and not it.get("draft")
                 if has_label(labs, ipl):
                     row["in_progress"] += 1
-                if internal:
+                if internal and not wlab:
                     row["ready_internal"] += 1
                 if not (wlab or internal):
                     continue
@@ -200,13 +208,22 @@ def build(dumps, config, now):
                 })
         row["waiting_on_you"] = n_wait
 
+        if len(merged) >= 30:
+            seen = [parse_ts(m.get("updated_at") or m.get("closed_at") or m.get("merged_at")) for m in merged]
+            seen = [d for d in seen if d]
+            if seen and min(seen) >= window:
+                row["merged_7d_capped"] = True
+                print("warning: %s merged.json has %d rows and none older than %d days; "
+                      "merged_7d may be undercounted (fetch more pages)" % (name, len(merged), WINDOW_DAYS),
+                      file=sys.stderr)
+
         merged_nums = set()
         for m in merged:
             dt = parse_ts(m.get("merged_at"))
             if not dt:
                 continue
-            merged_nums.add(m.get("number"))
             if dt >= window:
+                merged_nums.add(m.get("number"))
                 row["merged_7d"] += 1
                 activity.append({
                     "key": "%s:pr:%s" % (name, m.get("number")), "project": name,
@@ -216,7 +233,7 @@ def build(dumps, config, now):
         for dt, msg, sha, url in cinfos:
             if not dt or dt < window:
                 continue
-            m = re.search(r"\(#(\d+)\)\s*$", msg)
+            m = re.search(r"\(#(\d+)\)\s*$", msg) or re.match(r"Merge pull request #(\d+)", msg)
             if m and int(m.group(1)) in merged_nums:
                 continue
             activity.append({

@@ -146,6 +146,47 @@ class Build(Base):
         _, _, act = self.run_build({"alpha": {"commits.json": commits}})
         self.assertEqual(len(act), 40)
 
+    def test_merge_commit_dedupe_and_window_scope(self):
+        merged = [pr(7, merged_at="2026-10-30T12:00:00Z"), pr(8, merged_at="2026-10-01T12:00:00Z")]
+        commits = [
+            commit("1" * 40, "Merge pull request #7 from o/branch", "2026-10-30T11:00:00Z"),
+            commit("2" * 40, "Merge pull request #8 from o/old", "2026-10-30T10:00:00Z"),
+        ]
+        _, _, act = self.run_build({"alpha": {"merged.json": merged, "commits.json": commits}})
+        self.assertEqual([r["key"] for r in act], ["alpha:pr:7", "alpha:c:2222222"])
+
+    def test_capped_flag_and_warning(self):
+        import contextlib
+        import io
+        merged = [pr(i, merged_at="2026-10-30T12:00:00Z", updated_at="2026-10-30T12:00:00Z") for i in range(1, 31)]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            p, _, _ = self.run_build({"alpha": {"merged.json": merged}})
+        self.assertTrue(p["alpha"]["merged_7d_capped"])
+        self.assertIn("alpha", err.getvalue())
+        merged[-1]["updated_at"] = "2026-10-01T12:00:00Z"
+        p, _, _ = self.run_build({"alpha": {"merged.json": merged}})
+        self.assertFalse(p["alpha"]["merged_7d_capped"])
+
+    def test_last_commit_is_newest_by_date(self):
+        commits = [commit("1" * 40, "older", "2026-10-29T12:00:00Z"),
+                   commit("2" * 40, "newest", "2026-10-30T12:00:00Z")]
+        p, _, _ = self.run_build({"alpha": {"commits.json": commits}})
+        self.assertEqual(p["alpha"]["last_commit_msg"], "newest")
+        self.assertEqual(p["alpha"]["last_activity_at"], "2026-10-30T12:00:00Z")
+
+    def test_closed_unmerged_does_not_count_as_activity(self):
+        merged = [pr(9, merged_at=None, updated_at="2026-10-31T11:00:00Z", closed_at="2026-10-31T11:00:00Z")]
+        p, _, _ = self.run_build({"alpha": {"merged.json": merged}})
+        self.assertEqual(p["alpha"]["last_activity_at"], "")
+        self.assertEqual(p["alpha"]["status"], "Idle")
+
+    def test_ready_internal_excludes_waiting_label(self):
+        prs = [pr(1, labels=["internal"]), pr(2, labels=["internal", "needs-owner"])]
+        p, _, _ = self.run_build({"alpha": {"prs.json": prs}})
+        self.assertEqual(p["alpha"]["ready_internal"], 1)
+        self.assertEqual(p["alpha"]["waiting_on_you"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -93,9 +93,9 @@
       var a = nm.append('a').attr('href', r.url).attr('target', '_blank').attr('rel', 'noopener').text(r.project);
       mark(a, 'projects', 'project', w);
       var connected = String(r.connected) === 'true';
-      var pill = head.append('span').attr('class', 'pf-pill ' + statusClass(r.status))
-        .text(connected ? r.status : 'Not connected — grant the Claude GitHub app access');
-      mark(pill, 'projects', 'status', w);
+      var pill = head.append('span').attr('class', 'pf-pill ' + statusClass(r.status));
+      mark(pill.append('span').text(r.status), 'projects', 'status', w);
+      if (!connected) pill.append('span').text(' — grant the Claude GitHub app access');
       if (r.blurb) mark(card.append('div').attr('class', 'pf-blurb').text(r.blurb), 'projects', 'blurb', w);
       if (connected) {
         var la = card.append('div').attr('class', 'pf-small');
@@ -114,7 +114,8 @@
         [['waiting_on_you', 'waiting'], ['open_prs', 'open PRs'], ['merged_7d', 'merged 7d'], ['open_issues', 'issues']]
           .forEach(function (s) {
             var cell = stats.append('div').attr('class', 'pf-stat');
-            mark(cell.append('b').text(String(num(r[s[0]]))), 'projects', s[0], w);
+            var capped = s[0] === 'merged_7d' && String(r.merged_7d_capped) === 'true';
+            mark(cell.append('b').text((capped ? '\u2265' : '') + String(num(r[s[0]]))), 'projects', s[0], w);
             cell.append('span').text(s[1]);
           });
         if (r.stage || r.next_step) {
@@ -148,8 +149,12 @@
       var row = tb.append('tr');
       cols.forEach(function (c) {
         var td = row.append('td');
-        if (c.link) td.append('a').attr('href', r.url).attr('target', '_blank').attr('rel', 'noopener').text(String(r[c.field]));
-        else td.text(String(r[c.field]));
+        var v = r[c.field];
+        var txt = (v === null || v === undefined || v === '') ? '\u2014' : String(v);
+        if (c.link) {
+          var ln = td.append('a').attr('target', '_blank').attr('rel', 'noopener').text(txt);
+          if (typeof r.url === 'string' && r.url.indexOf('https://') === 0) ln.attr('href', r.url);
+        } else td.text(txt);
       });
     });
   }
