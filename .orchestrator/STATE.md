@@ -1,7 +1,7 @@
 # STATE (orchestrator-owned, at most 40 lines; written BEFORE any agent is spawned)
 
 task: T2   title: Dashboard v2 (control room: add/archive, project detail, live sessions)
-stage: build
+stage: release
 owner_gate: none   last_approval: spec approved in chat 2026-10-31
 
 | stage | agent | model | effort | spawned (UTC) | status | verdict | evidence path | round |
@@ -17,6 +17,6 @@ reviewer: strongest
 pr_label: needs-owner   changed_lines: ~900 (new tool; over ~400, split not useful)
 spend: unknown, spawns 6 / per-task soft cap (docs/budget.md not filled in yet)
 
-next_step: PR 2 (add/archive + live sessions) build; v2 page live at https://claude.ai/artifact/LokeoRLzKdu7G2mniBHkXd
+next_step: follow-ups from PR 2 review (refusal message for invalid_argument, tool_error text, dot-only repo segments, repo picker retry, tests for capabilities file and connector-denied branch)
 blockers: none (stop hook wants Claude-authored commits; not done: conflicts with no-AI-attribution and no-rebase rules)
 resume: dashboard https://claude.ai/artifact/34vBev4QzzJYCR5746Grse ; refresh = docs/runbooks/update-fleet-dashboard.md
