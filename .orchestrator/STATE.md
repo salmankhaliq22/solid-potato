@@ -17,6 +17,6 @@ reviewer: strongest
 pr_label: needs-owner   changed_lines: ~900 (new tool; over ~400, split not useful)
 spend: unknown, spawns 6 / per-task soft cap (docs/budget.md not filled in yet)
 
-next_step: builder: PR 1 (F1 builder, F2 control.html screens, F3 runbook + seed)
-blockers: push to solid-potato refused (403: Claude GitHub App has no access to solid-potato); no GitHub connector on claude.ai (dashboard is a snapshot, refreshed on request)
+next_step: PR 2 (add/archive + live sessions) build; v2 page live at https://claude.ai/artifact/LokeoRLzKdu7G2mniBHkXd
+blockers: none (stop hook wants Claude-authored commits; not done: conflicts with no-AI-attribution and no-rebase rules)
 resume: dashboard https://claude.ai/artifact/34vBev4QzzJYCR5746Grse ; refresh = docs/runbooks/update-fleet-dashboard.md
