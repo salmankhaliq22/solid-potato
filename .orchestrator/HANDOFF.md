@@ -6,7 +6,7 @@ Updated (UTC): 2026-10-31 00:25   By: orchestrator   Session goal: one dashboard
 - [x] habibi kit installed in solid-potato (D-20261030T235942)
 - [x] Project list and on-request refresh decided (D-20261031T001035)
 - [x] tools/fleet builder + page + runbook; verified PASS in round 3 of 3
-- [x] Dashboard published (private): https://claude.ai/artifact/34vBev4QzzJYCR5746Grse, data as of 2026-10-31 00:18 UTC
+- [x] v1 dashboard published, then deleted at the owner's request (2026-10-31)
 - [x] Branch pushed
 - [x] v2 spec approved (D-20261031T003114); PR 1 verified PASS (round 2); v2 page published 2026-10-31: https://claude.ai/artifact/LokeoRLzKdu7G2mniBHkXd (seeded 5 projects, snapshot from fresh dumps)
 - [ ] PR 2: add/archive + live sessions
