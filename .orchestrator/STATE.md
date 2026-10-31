@@ -1,7 +1,7 @@
 # STATE (orchestrator-owned, at most 40 lines; written BEFORE any agent is spawned)
 
-task: T1   title: Cross-project dashboard (Project Fleet)
-stage: pr
+task: T2   title: Dashboard v2 (control room: add/archive, project detail, live sessions)
+stage: spec
 owner_gate: waiting   last_approval: projects + on-request refresh (docs/decisions, 2026-10-31)
 
 | stage | agent | model | effort | spawned (UTC) | status | verdict | evidence path | round |
