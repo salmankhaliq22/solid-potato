@@ -1,33 +1,27 @@
 # HANDOFF
 
-Written by the orchestrator after each major block of work (a merged PR, a verify round, a decision, before stopping).
-A fresh session resumes from this file alone: after `/clear`, say "Read .orchestrator/HANDOFF.md and resume".
-Keep it under about 60 lines. Facts only; say UNCONFIRMED where you are not sure. Overwrite it each time (git keeps
-the history if the owner commits it).
-
-Updated (UTC): <yyyy-mm-dd hh:mm>   By: orchestrator   Session goal: <one line>
+Updated (UTC): 2026-10-31 00:25   By: orchestrator   Session goal: one dashboard showing progress across all Claude Code projects
 
 ## Milestones
-- [x] <done milestone> (PR #N merged / decision D-NNN)
-- [ ] <next milestone> (issue #N)
+- [x] habibi kit installed in solid-potato (D-20261030T235942)
+- [x] Project list and on-request refresh decided (D-20261031T001035)
+- [x] tools/fleet builder + page + runbook; verified PASS in round 3 of 3
+- [x] Dashboard published (private): https://claude.ai/artifact/34vBev4QzzJYCR5746Grse, data as of 2026-10-31 00:18 UTC
+- [ ] Branch pushed (blocked: GitHub App lacks solid-potato)
 
 ## State
-- Branch / worktree per open task: <task> -> <branch> at <path>, last commit <sha>
-- Open PRs and their labels: #N `internal` | `needs-owner`, checks <green/red>, verdict <PASS/FAIL/PARTIAL + path>
-- Running or lost agents (from `.orchestrator/STATE.md`): <none | list>
-- Verify rounds used per task (max 3): <task>: <n>
-- Spend so far (from `python scripts/metrics_log.py week`): tokens <n | unknown>, spawns <n>
+- Branch claude/fervent-einstein-88fosa, local commits only.
+- Projects: scifun, nightshift, habibi, resd (all_open_prs_wait), oneblockatatime. ACRD and BioTwin excluded by the owner.
+- Refresh is on request only (no schedule).
 
 ## Waiting on the owner
-- <one question, with the recommendation> (asked <when>)
+- Add solid-potato to the Claude GitHub App so the branch can be pushed.
+- Optional: add a line to CLAUDE.md pointing "update the dashboard" at docs/runbooks/update-fleet-dashboard.md (CLAUDE.md is owner-only).
+- Fill in the caps in docs/budget.md.
 
 ## To do (in order)
-1. <next concrete step, who does it>
-2. <...>
+1. Push the branch once access is granted; open a needs-owner PR if the owner asks.
+2. On "update the dashboard": follow docs/runbooks/update-fleet-dashboard.md.
 
 ## Resume steps
-1. Read this file, then `.orchestrator/STATE.md`, then the decision log entries listed above.
-2. Check reality before acting: `git status --short`, `git worktree list`, `gh pr list` (open PRs), and the
-   verdict files named above. If anything differs from this file, trust git and GitHub, and fix this file first.
-3. Re-dispatch lost agents as the orchestrate skill says (a lost verify round still counts).
-4. Continue with "To do" item 1. Do not redo finished milestones.
+1. Read this file, then STATE.md. 2. Check git status and the dashboard link. 3. Continue with To do item 1.
