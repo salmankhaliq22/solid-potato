@@ -13,5 +13,5 @@ pr_label: needs-owner   changed_lines: tbd
 spend: unknown, spawns 1 / per-task soft cap (docs/budget.md not filled in yet)
 
 next_step: builder writes tools/fleet (data builder + tests + page); orchestrator dumps GitHub data
-blockers: resd and oneblockatatime not accessible to the Claude GitHub App; no GitHub connector on claude.ai (no live queries)
+blockers: push to solid-potato refused (403: Claude GitHub App has no access to solid-potato); resd and oneblockatatime not accessible; no GitHub connector on claude.ai
 resume: dashboard https://claude.ai/artifact/34vBev4QzzJYCR5746Grse
