@@ -1,0 +1,174 @@
+<style>
+.pf-wrap{font-family:var(--font-anthropic-sans);color:var(--color-fg);max-width:1100px;margin:0 auto;padding:16px;box-sizing:border-box}
+.pf-wrap *{box-sizing:border-box}
+.pf-h2{font-size:15px;font-weight:600;margin:28px 0 10px;letter-spacing:.01em}
+.pf-totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px}
+.pf-tile{background:var(--color-panel);border:1px solid var(--color-border-line);border-radius:10px;padding:14px}
+.pf-big{font-family:var(--font-anthropic-serif);font-size:34px;line-height:1.1}
+.pf-lbl{font-size:12px;color:var(--color-fg-muted);margin-top:4px}
+.pf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.pf-card{background:var(--color-panel);border:1px solid var(--color-border-line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.pf-cardhead{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.pf-name{font-weight:600;font-size:16px;color:var(--color-fg)}
+.pf-pill{font-size:11px;border:1px solid currentColor;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.pf-ok{color:var(--color-ok)}.pf-warn{color:var(--color-warn)}.pf-bad{color:var(--color-bad)}.pf-muted{color:var(--color-fg-muted)}
+.pf-blurb,.pf-small{font-size:13px;color:var(--color-fg-muted);overflow-wrap:anywhere}
+.pf-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;border-top:1px solid var(--color-border-line);padding-top:8px}
+.pf-stat b{display:block;font-size:18px;font-weight:600}
+.pf-stat span{font-size:11px;color:var(--color-fg-muted)}
+.pf-tablewrap{overflow-x:auto}
+.pf-table{width:100%;border-collapse:collapse;font-size:13px}
+.pf-table th{text-align:left;font-weight:600;color:var(--color-fg-muted);border-bottom:1px solid var(--color-border-line);padding:6px 8px;white-space:nowrap}
+.pf-table td{padding:6px 8px;border-bottom:1px solid var(--color-border-line);vertical-align:top}
+.pf-table a,.pf-name a{color:inherit}
+.pf-empty{font-size:13px;color:var(--color-fg-muted);padding:8px 0}
+</style>
+<div class="pf-wrap" id="pf-root">
+  <section id="pf-totals-section">
+    <div class="pf-totals" id="pf-totals"></div>
+  </section>
+  <section id="pf-projects-section">
+    <h2 class="pf-h2" id="pf-projects-h">Projects</h2>
+    <div class="pf-grid" id="pf-projects"></div>
+  </section>
+  <section id="pf-waiting-section">
+    <h2 class="pf-h2" id="pf-waiting-h">Waiting on you</h2>
+    <div id="pf-waiting"></div>
+  </section>
+  <section id="pf-activity-section">
+    <h2 class="pf-h2" id="pf-activity-h">This week</h2>
+    <div id="pf-activity"></div>
+  </section>
+</div>
+<script>
+(function () {
+  var DASH = '—';
+  var num = function (v) { var n = Number(v); return isFinite(n) ? n : 0; };
+  var rowsOf = function (id) { var d = dash.data(id); return d && d.status === 'ok' && Array.isArray(d.data) ? d.data : null; };
+  var mark = function (sel, src, field, where) {
+    sel.attr('data-source', src).attr('data-field', field);
+    if (where) sel.attr('data-where', where);
+    return sel;
+  };
+
+  dash.calc('totals', {
+    inputs: ['projects'],
+    title: 'Fleet totals',
+    description: 'Sums each count across all projects.',
+    fn: function (projects) {
+      var s = function (f) { return projects.reduce(function (a, r) { return a + num(r[f]); }, 0); };
+      return [{
+        waiting_on_you: s('waiting_on_you'),
+        open_prs: s('open_prs'),
+        merged_7d: s('merged_7d'),
+        active: projects.filter(function (r) { return r.status === 'Active'; }).length
+      }];
+    }
+  });
+
+  function drawTotals() {
+    var root = d3.select('#pf-totals').html('');
+    var d = dash.data('totals');
+    var row = d && d.status === 'ok' && d.data && d.data[0] ? d.data[0] : null;
+    [['waiting_on_you', 'Waiting on you'], ['open_prs', 'Open PRs'], ['merged_7d', 'Merged this week'], ['active', 'Active projects']]
+      .forEach(function (t) {
+        var tile = root.append('div').attr('class', 'pf-tile');
+        var big = tile.append('div').attr('class', 'pf-big').text(row ? String(num(row[t[0]])) : DASH);
+        mark(big, 'totals', t[0]).attr('data-row', '0');
+        tile.append('div').attr('class', 'pf-lbl').text(t[1]);
+      });
+  }
+
+  function statusClass(s) { return s === 'Active' ? 'pf-ok' : s === 'Quiet' ? 'pf-warn' : s === 'Not connected' ? 'pf-bad' : 'pf-muted'; }
+
+  function drawProjects() {
+    var root = d3.select('#pf-projects').html('');
+    var rows = rowsOf('projects');
+    if (!rows) { root.append('div').attr('class', 'pf-empty').text(DASH); return; }
+    rows.forEach(function (r) {
+      var w = 'project=' + r.project;
+      var card = root.append('div').attr('class', 'pf-card');
+      var head = card.append('div').attr('class', 'pf-cardhead');
+      var nm = head.append('div').attr('class', 'pf-name');
+      var a = nm.append('a').attr('href', r.url).attr('target', '_blank').attr('rel', 'noopener').text(r.project);
+      mark(a, 'projects', 'project', w);
+      var connected = String(r.connected) === 'true';
+      var pill = head.append('span').attr('class', 'pf-pill ' + statusClass(r.status))
+        .text(connected ? r.status : 'Not connected — grant the Claude GitHub app access');
+      mark(pill, 'projects', 'status', w);
+      if (r.blurb) mark(card.append('div').attr('class', 'pf-blurb').text(r.blurb), 'projects', 'blurb', w);
+      if (connected) {
+        var la = card.append('div').attr('class', 'pf-small');
+        var days = num(r.last_activity_days);
+        if (days >= 0 && r.last_activity_at) {
+          mark(la.append('span').text(String(days)), 'projects', 'last_activity_days', w);
+          la.append('span').text(' days ago');
+        } else {
+          la.append('span').text('No recent activity');
+        }
+        if (r.last_commit_msg) {
+          la.append('span').text(' · ');
+          mark(la.append('span').text(r.last_commit_msg), 'projects', 'last_commit_msg', w);
+        }
+        var stats = card.append('div').attr('class', 'pf-stats');
+        [['waiting_on_you', 'waiting'], ['open_prs', 'open PRs'], ['merged_7d', 'merged 7d'], ['open_issues', 'issues']]
+          .forEach(function (s) {
+            var cell = stats.append('div').attr('class', 'pf-stat');
+            mark(cell.append('b').text(String(num(r[s[0]]))), 'projects', s[0], w);
+            cell.append('span').text(s[1]);
+          });
+        if (r.stage || r.next_step) {
+          var o = card.append('div').attr('class', 'pf-small');
+          o.append('span').text('Orchestrator: ');
+          if (r.stage) mark(o.append('span').text(r.stage), 'projects', 'stage', w);
+          if (r.next_step) {
+            o.append('span').text(' — next: ');
+            mark(o.append('span').text(r.next_step), 'projects', 'next_step', w);
+          }
+        }
+        if (r.blockers) {
+          var b = card.append('div').attr('class', 'pf-small pf-warn');
+          b.append('span').text('Blockers: ');
+          mark(b.append('span').text(r.blockers), 'projects', 'blockers', w);
+        }
+      }
+    });
+  }
+
+  function drawTable(rootSel, id, cols, rows, emptyText, keyField) {
+    var root = d3.select(rootSel).html('');
+    if (!rows) { root.append('div').attr('class', 'pf-empty').text(DASH); return; }
+    if (!rows.length) { root.append('div').attr('class', 'pf-empty').text(emptyText); return; }
+    var wrap = root.append('div').attr('class', 'pf-tablewrap');
+    var t = wrap.append('table').attr('class', 'pf-table').attr('data-source', id).attr('data-row-key', keyField);
+    var tr = t.append('thead').append('tr');
+    cols.forEach(function (c) { tr.append('th').attr('data-field', c.field).text(c.label); });
+    var tb = t.append('tbody');
+    rows.forEach(function (r) {
+      var row = tb.append('tr');
+      cols.forEach(function (c) {
+        var td = row.append('td');
+        if (c.link) td.append('a').attr('href', r.url).attr('target', '_blank').attr('rel', 'noopener').text(String(r[c.field]));
+        else td.text(String(r[c.field]));
+      });
+    });
+  }
+
+  function draw() {
+    drawTotals();
+    drawProjects();
+    drawTable('#pf-waiting', 'waiting', [
+      { field: 'key', label: 'Ref' }, { field: 'project', label: 'Project' },
+      { field: 'title', label: 'Item', link: true }, { field: 'why', label: 'Why' },
+      { field: 'age_days', label: 'Age (days)' }
+    ], rowsOf('waiting'), 'Nothing is waiting on you.', 'key');
+    drawTable('#pf-activity', 'activity', [
+      { field: 'key', label: 'Ref' }, { field: 'project', label: 'Project' },
+      { field: 'title', label: 'What', link: true }, { field: 'kind', label: 'Kind' },
+      { field: 'days_ago', label: 'When (days ago)' }
+    ], rowsOf('activity'), 'Nothing merged or committed this week.', 'key');
+  }
+
+  dash.onData(draw);
+})();
+</script>
