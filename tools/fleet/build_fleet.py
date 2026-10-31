@@ -121,7 +121,7 @@ def commit_info(c):
     return dt, first_line(commit.get("message", "")), str(c.get("sha", "")), c.get("html_url", "")
 
 
-def build(dumps, config, now):
+def build(dumps, config, now, keep_raw=False, activity_cap=40):
     wl = config.get("waiting_labels", [])
     ipl = config.get("in_progress_labels", [])
     active_d = config.get("active_days", 2)
@@ -210,6 +210,8 @@ def build(dumps, config, now):
                     "_w": 0 if wlab else 1,
                 })
         row["waiting_on_you"] = n_wait
+        if keep_raw:
+            row["_prs"], row["_issues"] = prs, issues
 
         if len(merged) >= 30:
             seen = [parse_ts(m.get("updated_at") or m.get("closed_at") or m.get("merged_at")) for m in merged]
@@ -253,16 +255,225 @@ def build(dumps, config, now):
     for r in waiting:
         del r["_w"]
     activity.sort(key=lambda r: r["_dt"], reverse=True)
-    activity = activity[:40]
+    if activity_cap:
+        activity = activity[:activity_cap]
     for r in activity:
         r["days_ago"] = days_between(now, r.pop("_dt"))
     return projects, waiting, activity
+
+
+# ---- v2: per-project snapshot docs (spec fleet-control-room F1) ----
+MAX_PRS, MAX_ISSUES, MAX_ACTIVITY = 30, 50, 40
+BODY_CAP, BODY_TRIM = 4000, 1000
+DOC_LIMIT = 240 * 1024
+BATCH_LIMIT = 900 * 1024
+BATCH_WRITES = 50
+NAME_RE = re.compile(r"[a-z0-9-]+", re.ASCII)
+REPO_RE = re.compile(r"[\w.-]+/[\w.-]+", re.ASCII)
+
+
+def doc_size(doc):
+    return len(json.dumps(doc, ensure_ascii=False).encode("utf-8"))
+
+
+def read_projects(path):
+    """Normalise an ArtifactData list ({id, data}) or bare objects into (docs, warnings).
+    Archived and invalid docs are skipped."""
+    with open(path, encoding="utf-8") as fh:
+        raw = json.load(fh)
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    if isinstance(raw, dict):
+        for key in ("docs", "documents", "items", "data"):
+            if isinstance(raw.get(key), list):
+                raw = raw[key]
+                break
+    if isinstance(raw, list) and raw and all(isinstance(x, dict) and x.get("type") == "text" and "text" in x for x in raw):
+        raw = json.loads(raw[0]["text"])
+        if isinstance(raw, dict):
+            raw = raw.get("docs") or raw.get("documents") or raw.get("items") or []
+    docs, warns, seen = [], [], set()
+    for x in raw if isinstance(raw, list) else []:
+        if not isinstance(x, dict):
+            continue
+        if isinstance(x.get("data"), dict) and "id" in x:
+            d = dict(x["data"])
+            d["name"] = x["id"]
+        else:
+            d = dict(x)
+        name, repo = d.get("name"), d.get("repo")
+        if d.get("archived"):
+            continue
+        if not (isinstance(name, str) and NAME_RE.fullmatch(name)):
+            warns.append("skipped project with invalid name %r" % (name,))
+            continue
+        if not (isinstance(repo, str) and REPO_RE.fullmatch(repo)):
+            warns.append("skipped project %s: invalid repo %r" % (name, repo))
+            continue
+        if name in seen:
+            warns.append("skipped duplicate project %s" % name)
+            continue
+        seen.add(name)
+        docs.append({"name": name, "repo": repo, "blurb": str(d.get("blurb") or ""),
+                     "all_open_prs_wait": bool(d.get("all_open_prs_wait"))})
+    return docs, warns
+
+
+def load_pr_detail(folder, number):
+    path = os.path.join(folder, "pr_%s.json" % number)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        if isinstance(raw, list) and raw and isinstance(raw[0], dict) and raw[0].get("type") == "text":
+            raw = json.loads(raw[0]["text"])
+        if isinstance(raw, list) and len(raw) == 1:
+            raw = raw[0]
+        return raw if isinstance(raw, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def cut_body(text, n):
+    text = text if isinstance(text, str) else ""
+    return text[:n], len(text) > n
+
+
+def fit_doc(doc):
+    """Trim a snapshot doc under DOC_LIMIT. Returns True if it fits."""
+    if doc_size(doc) <= DOC_LIMIT:
+        return True
+    for key in ("activity", "open_issues"):
+        while doc[key] and doc_size(doc) > DOC_LIMIT:
+            del doc[key][len(doc[key]) // 2:]
+    if doc_size(doc) <= DOC_LIMIT:
+        return True
+    for limit in (BODY_TRIM, 0):
+        for pr in doc["open_prs"]:
+            pr["body"], cut = cut_body(pr["body"], limit)
+            pr["body_truncated"] = pr["body_truncated"] or cut
+        if doc_size(doc) <= DOC_LIMIT:
+            return True
+    return False
+
+
+def build_snapshots(dumps, plist, config, now):
+    """Return (docs, errors). docs maps name -> (op, doc): op 'set' for a full doc,
+    'update' for a not-connected partial that must merge into the old snapshot."""
+    stamp = iso(now)
+    conf = dict(config, projects=[p for p in plist if os.path.isdir(os.path.join(dumps, p["name"]))
+                                  and not os.path.isfile(os.path.join(dumps, p["name"], "not_connected.txt"))])
+    rows, waiting, activity = build(dumps, conf, now, keep_raw=True, activity_cap=None)
+    rows = {r["project"]: r for r in rows}
+    docs, errors = {}, []
+    for p in plist:
+        name = p["name"]
+        folder = os.path.join(dumps, name)
+        reason = None
+        if os.path.isfile(os.path.join(folder, "not_connected.txt")):
+            reason = first_line(load_text(folder, "not_connected.txt")) or "Not connected"
+        elif not os.path.isdir(folder):
+            reason = "No data was fetched for this project"
+        if reason is not None:
+            docs[name] = ("update", {"updated_at": stamp, "connected": False, "not_connected_reason": reason})
+            continue
+        row = rows[name]
+        prs, issues = row.pop("_prs"), row.pop("_issues")
+        mine = [w for w in waiting if w["project"] == name]
+        why = {w["number"]: w["why"] for w in mine if w["kind"] == "PR"}
+        wait_issue = {w["number"] for w in mine if w["kind"] == "Issue"}
+        pr_rows = []
+        for x in prs:
+            created = parse_ts(x.get("created_at"))
+            detail = load_pr_detail(folder, x.get("number"))
+            body, cut = cut_body(detail.get("body"), BODY_CAP)
+            def blank(v):
+                return v if isinstance(v, (int, str)) and not isinstance(v, bool) else ""
+            pr_rows.append({
+                "number": x.get("number"), "title": clip(x.get("title", ""), 200), "url": x.get("html_url", ""),
+                "labels": labels_of(x), "draft": bool(x.get("draft")), "created_at": iso(created),
+                "updated_at": iso(parse_ts(x.get("updated_at"))),
+                "age_days": days_between(now, created) if created else 0,
+                "why": why.get(x.get("number"), ""), "body": body, "body_truncated": cut,
+                "additions": blank(detail.get("additions")), "deletions": blank(detail.get("deletions")),
+                "mergeable_state": blank(detail.get("mergeable_state")),
+            })
+        issue_rows = []
+        for x in issues:
+            created = parse_ts(x.get("created_at"))
+            issue_rows.append({
+                "number": x.get("number"), "title": clip(x.get("title", ""), 200), "url": x.get("html_url", ""),
+                "labels": labels_of(x), "created_at": iso(created),
+                "age_days": days_between(now, created) if created else 0,
+                "_w": 0 if x.get("number") in wait_issue else 1,
+            })
+        pr_rows.sort(key=lambda r: (0 if r["why"] else 1, r["age_days"], r["number"] or 0))
+        issue_rows.sort(key=lambda r: (r["_w"], r["age_days"], r["number"] or 0))
+        for r in issue_rows:
+            del r["_w"]
+        row.pop("open_prs"), row.pop("open_issues")
+        row["blurb"] = p["blurb"]
+        doc = dict(row, updated_at=stamp, open_pr_count=len(prs), open_issue_count=len(issues),
+                   open_prs=pr_rows[:MAX_PRS], open_issues=issue_rows[:MAX_ISSUES],
+                   activity=[dict(a) for a in activity if a["project"] == name][:MAX_ACTIVITY], waiting=mine)
+        if "not_connected_reason" in doc:
+            del doc["not_connected_reason"]
+        if not fit_doc(doc):
+            errors.append("%s: snapshot still %d bytes after trimming (limit %d); nothing written for it"
+                          % (name, doc_size(doc), DOC_LIMIT))
+            continue
+        docs[name] = ("set", doc)
+    return docs, errors
+
+
+def plan_batches(docs, meta):
+    """Group writes into batches under BATCH_LIMIT bytes; _meta alone in the last one."""
+    batches, cur, size = [], [], 0
+    for name in sorted(docs):
+        op, doc = docs[name]
+        w = {"action": op, "collection": "snapshot", "doc_id": name, "data": doc}
+        n = doc_size(w)
+        if cur and (size + n > BATCH_LIMIT or len(cur) >= BATCH_WRITES):
+            batches.append({"bytes": size, "writes": cur})
+            cur, size = [], 0
+        cur.append(w)
+        size += n
+    if cur:
+        batches.append({"bytes": size, "writes": cur})
+    w = {"action": "set", "collection": "snapshot", "doc_id": "_meta", "data": meta}
+    batches.append({"bytes": doc_size(w), "writes": [w]})
+    return batches
+
+
+def write_json(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+
+
+def main_v2(a, config, now):
+    plist, warns = read_projects(a.projects)
+    for w in warns:
+        print("warning: " + w, file=sys.stderr)
+    docs, errors = build_snapshots(a.dumps, plist, config, now)
+    meta = {"updated_at": iso(now)}
+    for name, (op, doc) in docs.items():
+        write_json(os.path.join(a.out, "snapshot", name + ".json"), doc)
+        print("snapshot/%s: %s, %d bytes" % (name, op, doc_size(doc)))
+    write_json(os.path.join(a.out, "snapshot", "_meta.json"), meta)
+    write_json(os.path.join(a.out, "batches.json"), {"batches": plan_batches(docs, meta)})
+    for e in errors:
+        print("error: " + e, file=sys.stderr)
+    return 1 if errors else 0
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dumps", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--projects", help="ArtifactData list of the projects collection (v2 snapshot output)")
     ap.add_argument("--now")
     ap.add_argument("--config", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json"))
     a = ap.parse_args(argv)
@@ -271,6 +482,8 @@ def main(argv=None):
     now = parse_ts(a.now) if a.now else datetime.now(timezone.utc)
     if now is None:
         ap.error("bad --now")
+    if a.projects:
+        return main_v2(a, config, now)
     projects, waiting, activity = build(a.dumps, config, now)
     os.makedirs(a.out, exist_ok=True)
     files = {"projects.json": projects, "waiting.json": waiting, "activity.json": activity}

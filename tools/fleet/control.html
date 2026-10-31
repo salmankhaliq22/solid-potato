@@ -1,0 +1,282 @@
+<title>Project Fleet</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{--bg:#f6f5f1;--panel:#fff;--fg:#1c1b19;--muted:#6a675f;--line:#dedbd2;--accent:#2f5d8a;--ok:#2d7a46;--warn:#9a6a00;--bad:#b3362b;color-scheme:light}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#171716;--panel:#222220;--fg:#ecebe6;--muted:#a09d94;--line:#383733;--accent:#8db8e6;--ok:#6cc58a;--warn:#e0b04a;--bad:#f08a80;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171716;--panel:#222220;--fg:#ecebe6;--muted:#a09d94;--line:#383733;--accent:#8db8e6;--ok:#6cc58a;--warn:#e0b04a;--bad:#f08a80;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px));overflow-x:hidden}
+#app{max-width:1000px;margin:0 auto;min-width:0}
+h1{font-size:22px;margin:4px 0 2px}
+h2{font-size:15px;margin:28px 0 10px;letter-spacing:.01em}
+a{color:var(--accent)}
+.muted{color:var(--muted)}.small{font-size:13px}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.pill{display:inline-block;font-size:11px;line-height:1.5;border:1px solid currentColor;border-radius:999px;padding:0 8px;white-space:nowrap;margin-right:4px}
+.msg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin:16px 0;overflow-wrap:anywhere}
+.totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-top:14px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.tile b{display:block;font-size:26px;line-height:1.1}
+.tile span{font-size:12px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.card{display:flex;flex-direction:column;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;color:var(--fg);text-decoration:none;min-width:0}
+.card:hover,.card:focus-visible{border-color:var(--accent)}
+.card .name{font-weight:600;font-size:16px;overflow-wrap:anywhere}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;border-top:1px solid var(--line);padding-top:8px;margin-top:2px}
+.stats b{display:block;font-size:17px}.stats span{font-size:11px;color:var(--muted)}
+.list{display:flex;flex-direction:column;gap:8px}
+.row{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0;overflow-wrap:anywhere}
+.row .top{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline}
+.row .title{font-weight:600}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center}
+.btn{display:inline-block;border:1px solid var(--line);border-radius:8px;padding:5px 12px;text-decoration:none;color:var(--fg);background:var(--bg);font-size:13px}
+.btn.primary{border-color:var(--accent);color:var(--accent)}
+.body{white-space:pre-wrap;font-size:13px;color:var(--muted);margin:8px 0 0;max-height:16em;overflow:auto}
+details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px}
+.back{display:inline-block;margin-bottom:8px;font-size:14px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:14px;margin-top:8px}
+.kv dt{color:var(--muted)}.kv dd{margin:0;overflow-wrap:anywhere}
+</style>
+<div id="app"><div class="msg">Loading…</div></div>
+<script>
+/*__FLEET_LOGIC__*/
+(function () {
+  'use strict';
+  var L = window.FleetLogic;
+  var app = document.getElementById('app');
+  var state = { db: undefined, isOwner: false, projects: null, snaps: null, meta: null, error: '', archivedOpen: false };
+
+  // ---- tiny DOM helpers: data only ever goes in through textContent ----
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null && text !== '') e.textContent = String(text);
+    return e;
+  }
+  function add(parent) { for (var i = 1; i < arguments.length; i++) if (arguments[i]) parent.appendChild(arguments[i]); return parent; }
+  function link(url, text, cls) {
+    var href = L.safeHref(url);
+    if (!href) return el('span', cls, text);
+    var a = el('a', cls, text);
+    a.href = href; a.target = '_blank'; a.rel = 'noopener';
+    return a;
+  }
+  function when(s) {
+    var d = new Date(s);
+    return isNaN(d.getTime()) ? '' : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  }
+  function statusClass(s) { return s === 'Active' ? 'ok' : s === 'Quiet' ? 'warn' : s === 'Not connected' ? 'bad' : 'muted'; }
+  function pill(text, cls) { return el('span', 'pill ' + (cls || 'muted'), text); }
+  function message(text) { return add(el('div', 'msg'), el('div', '', text)); }
+
+  // ---- overview ----
+  function card(c) {
+    var a = el('a', 'card');
+    a.href = '#p-' + c.name;
+    var s = c.snap;
+    var head = el('div'); add(head, el('span', 'name', c.name));
+    add(a, head);
+    if (c.blurb) add(a, el('div', 'small muted', c.blurb));
+    if (!s) { add(a, el('div', 'small warn', 'Waiting for first refresh')); return a; }
+    var pills = el('div');
+    add(pills, pill(s.status || '—', statusClass(s.status)));
+    if (c.notConnected) add(pills, pill('Not connected', 'bad'));
+    if (c.stale) add(pills, pill('Stale', 'warn'));
+    add(a, pills);
+    if (c.notConnected) add(a, el('div', 'small bad', L.notConnectedText(c.repo)));
+    var st = el('div', 'stats');
+    [['waiting_on_you', 'waiting'], ['open_pr_count', 'open PRs'], ['open_issue_count', 'issues'], ['merged_7d', 'merged/wk']].forEach(function (p) {
+      add(st, add(el('div'), el('b', '', s[p[0]] == null ? '—' : s[p[0]]), el('span', '', p[1])));
+    });
+    add(a, st);
+    add(a, el('div', 'small muted', s.last_activity_at ? 'Last activity ' + when(s.last_activity_at) : 'No recent activity'));
+    return a;
+  }
+
+  function waitingRow(w) {
+    var r = el('div', 'row'), top = el('div', 'top');
+    add(top, link(w.url, w.title || w.key, 'title'), pill(w.label || w.kind || '', 'warn'),
+      el('span', 'small muted', (w.project || '') + ' ' + (w.kind || '') + ' #' + (w.number == null ? '' : w.number)));
+    add(r, top, el('div', 'small muted', (w.why || '') + ' · ' + L.ageLabel(w.age_days)));
+    return r;
+  }
+
+  function overview(groups) {
+    var root = el('div');
+    add(root, el('h1', '', 'Project Fleet'));
+    add(root, el('div', 'small muted', state.meta && state.meta.updated_at ? 'Data as of ' + when(state.meta.updated_at) : 'No refresh yet — say "update the dashboard".'));
+    // PR 2 hook: Add project button (owner only) goes here.
+    var t = L.totals(groups.active), tiles = el('div', 'totals');
+    [['projects', 'projects'], ['waiting', 'waiting on you'], ['openPrs', 'open PRs'], ['openIssues', 'open issues'], ['merged7d', 'merged this week']].forEach(function (p) {
+      add(tiles, add(el('div', 'tile'), el('b', '', t[p[0]]), el('span', '', p[1])));
+    });
+    add(root, tiles);
+
+    add(root, el('h2', '', 'Waiting on you'));
+    var w = L.waitingAll(groups.active), wl = el('div', 'list');
+    if (!w.length) add(wl, el('div', 'small muted', 'Nothing is waiting on you.'));
+    w.forEach(function (x) { add(wl, waitingRow(x)); });
+    add(root, wl);
+
+    add(root, el('h2', '', 'Projects'));
+    var grid = el('div', 'grid');
+    groups.active.forEach(function (c) { add(grid, card(c)); });
+    add(root, grid);
+
+    // PR 2 hook: "Other sessions" (collapsed) goes here.
+    if (groups.archived.length) {
+      var d = el('details'); d.open = state.archivedOpen;
+      d.addEventListener('toggle', function () { state.archivedOpen = d.open; });
+      add(d, el('summary', '', 'Archived projects (' + groups.archived.length + ')'));
+      var al = el('div', 'list');
+      groups.archived.forEach(function (c) {
+        var r = el('div', 'row'), top = el('div', 'top');
+        var a = el('a', 'title', c.name); a.href = '#p-' + c.name;
+        add(top, a, el('span', 'small muted', c.repo));
+        // PR 2 hook: Unarchive button (owner only).
+        add(r, top); add(al, r);
+      });
+      add(d, al); add(root, d);
+    }
+    return root;
+  }
+
+  // ---- project page ----
+  function prRow(pr) {
+    var r = el('div', 'row'), top = el('div', 'top');
+    add(top, el('span', 'title', '#' + pr.number + ' ' + (pr.title || '')));
+    if (pr.draft) add(top, pill('Draft', 'muted'));
+    (pr.labels || []).forEach(function (l) { add(top, pill(l, 'muted')); });
+    add(r, top);
+    var size = L.sizeLabel(pr);
+    add(r, el('div', 'small muted', [pr.why || 'Open', L.ageLabel(pr.age_days), size].filter(Boolean).join(' · ')));
+    var b = L.truncate(pr.body, 4000);
+    if (b.text) add(r, el('pre', 'body', b.text + (b.truncated || pr.body_truncated ? '\n… Read on GitHub' : '')));
+    var btns = el('div', 'btns');
+    add(btns, link(pr.url, 'Read on GitHub', 'btn'));
+    if (state.isOwner) add(btns, link(pr.url, 'Merge on GitHub', 'btn primary'));
+    var cf = L.conflictsLabel(pr.mergeable_state);
+    if (cf) add(btns, el('span', 'small bad', cf));
+    add(r, btns);
+    return r;
+  }
+
+  function projectPage(c) {
+    var root = el('div'), s = c.snap;
+    var back = el('a', 'back', '← All projects'); back.href = '#';
+    add(root, back, el('h1', '', c.name));
+    if (c.project && c.project.archived) add(root, el('div', 'small muted', 'Archived'));
+    if (c.repo) add(root, add(el('div', 'small muted'), link('https://github.com/' + c.repo, c.repo)));
+    if (c.blurb) add(root, el('div', 'small muted', c.blurb));
+    if (!s) { add(root, message('Waiting for first refresh')); return root; }
+
+    var pills = el('div'); pills.style.marginTop = '8px';
+    add(pills, pill(s.status || '—', statusClass(s.status)));
+    if (c.notConnected) add(pills, pill('Not connected', 'bad'));
+    if (c.stale) add(pills, pill('Stale', 'warn'));
+    add(root, pills);
+    if (c.notConnected) add(root, el('div', 'small bad', s.not_connected_reason ? L.notConnectedText(c.repo) + ' (' + s.not_connected_reason + ')' : L.notConnectedText(c.repo)));
+    var kv = el('dl', 'kv');
+    [['Last activity', s.last_activity_at ? when(s.last_activity_at) : ''], ['Stage', s.stage], ['Next step', s.next_step], ['Blockers', s.blockers]].forEach(function (p) {
+      if (p[1]) add(kv, el('dt', '', p[0]), el('dd', '', p[1]));
+    });
+    add(root, kv);
+
+    var prs = Array.isArray(s.open_prs) ? s.open_prs : [];
+    add(root, el('h2', '', 'Open PRs (' + (s.open_pr_count == null ? prs.length : s.open_pr_count) + ')'));
+    var lab = L.showingLabel(prs.length, s.open_pr_count);
+    if (lab) add(root, el('div', 'small muted', lab));
+    var pl = el('div', 'list');
+    if (!prs.length) add(pl, el('div', 'small muted', 'No open PRs.'));
+    L.sortPrs(prs).forEach(function (p) { add(pl, prRow(p)); });
+    add(root, pl);
+
+    var issues = Array.isArray(s.open_issues) ? s.open_issues : [];
+    add(root, el('h2', '', 'Open issues (' + (s.open_issue_count == null ? issues.length : s.open_issue_count) + ')'));
+    lab = L.showingLabel(issues.length, s.open_issue_count);
+    if (lab) add(root, el('div', 'small muted', lab));
+    var il = el('div', 'list');
+    if (!issues.length) add(il, el('div', 'small muted', 'No open issues.'));
+    issues.forEach(function (i) {
+      var r = el('div', 'row'), top = el('div', 'top');
+      add(top, link(i.url, '#' + i.number + ' ' + (i.title || ''), 'title'));
+      (i.labels || []).forEach(function (l) { add(top, pill(l, 'muted')); });
+      add(r, top, el('div', 'small muted', L.ageLabel(i.age_days)));
+      add(il, r);
+    });
+    add(root, il);
+
+    add(root, el('h2', '', 'This week'));
+    var acts = Array.isArray(s.activity) ? s.activity : [];
+    var al = el('div', 'list');
+    if (!acts.length) add(al, el('div', 'small muted', 'No activity this week.'));
+    acts.forEach(function (a) {
+      var r = el('div', 'row'), top = el('div', 'top');
+      add(top, pill(a.kind || '', 'muted'), link(a.url, a.title || '', 'title'));
+      add(r, top, el('div', 'small muted', when(a.at)));
+      add(al, r);
+    });
+    add(root, al);
+
+    // PR 2 hook: Live sessions panel (list_sessions) goes here.
+    add(root, el('div', 'small muted', s.updated_at ? 'Data as of ' + when(s.updated_at) : ''));
+    // PR 2 hook: Archive button (owner only).
+    return root;
+  }
+
+  // ---- routing / render ----
+  function render() {
+    var out;
+    if (state.db === null) out = message('The shared database is not available. Sign in to claude.ai and reopen this page.');
+    else if (state.error) out = message(state.error);
+    else if (state.db === undefined || state.projects === null || state.snaps === null) out = message('Loading…');
+    else if (!state.projects.length) out = message('No projects yet. The owner can seed or add projects, then say "update the dashboard".');
+    else {
+      var groups = L.groupProjects(state.projects, state.snaps, state.meta);
+      var name = L.parseHash(location.hash);
+      if (name) {
+        var all = groups.active.concat(groups.archived), found = null;
+        all.forEach(function (c) { if (c.name === name) found = c; });
+        if (found) out = projectPage(found);
+        else {
+          out = el('div');
+          var b = el('a', 'back', '← All projects'); b.href = '#';
+          add(out, b, message('No project called ' + name + '.'));
+        }
+      } else out = overview(groups);
+    }
+    var y = window.scrollY;
+    app.textContent = '';
+    app.appendChild(out);
+    window.scrollTo(0, y);
+  }
+
+  window.addEventListener('hashchange', function () { render(); window.scrollTo(0, 0); });
+  render();
+
+  // Subscribe once, after first paint; db may be null (signed out) and can take up to 10 s to settle.
+  function start() {
+    var c = window.claude;
+    if (!c || typeof c.use !== 'function') { state.db = null; render(); return; }
+    c.use('user').then(function (u) { return u ? u.isOwner() : false; })
+      .then(function (o) { state.isOwner = !!o; render(); }, function () {});
+    c.use('db').then(function (db) {
+      state.db = db || null;
+      if (!db) { render(); return; }
+      var fail = function () { state.error = 'Could not read the shared database. Reload the page to retry.'; render(); };
+      db.collection('projects').onSnapshot(function (snap) {
+        state.projects = snap.docs.map(function (d) { var x = d.data() || {}; x.id = d.id; return x; });
+        render();
+      }, fail);
+      db.collection('snapshot').onSnapshot(function (snap) {
+        var m = {}, meta = null;
+        snap.docs.forEach(function (d) { if (d.id === '_meta') meta = d.data() || null; else m[d.id] = d.data() || {}; });
+        state.snaps = m; state.meta = meta;
+        render();
+      }, fail);
+    }, function () { state.db = null; render(); });
+  }
+  start();
+})();
+</script>

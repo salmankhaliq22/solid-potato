@@ -1,0 +1,9 @@
+{
+  "db": {
+    "rules": [
+      {"path": "projects", "read": "view", "write": "owner"},
+      {"path": "snapshot", "read": "view", "write": "owner"}
+    ]
+  },
+  "user": {}
+}

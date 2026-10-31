@@ -1,0 +1,57 @@
+[
+  {
+    "id": "scifun",
+    "data": {
+      "repo": "salmankhaliq22/scifun",
+      "blurb": "Science-learning app for Explorer and Guide",
+      "archived": false,
+      "all_open_prs_wait": false,
+      "added_at": "2026-10-31T00:00:00Z",
+      "added_by": "seed"
+    }
+  },
+  {
+    "id": "nightshift",
+    "data": {
+      "repo": "salmankhaliq22/nightshift",
+      "blurb": "Overnight ticket worker plugin",
+      "archived": false,
+      "all_open_prs_wait": false,
+      "added_at": "2026-10-31T00:00:00Z",
+      "added_by": "seed"
+    }
+  },
+  {
+    "id": "habibi",
+    "data": {
+      "repo": "salmankhaliq22/habibi",
+      "blurb": "Orchestrator kit plugin",
+      "archived": false,
+      "all_open_prs_wait": false,
+      "added_at": "2026-10-31T00:00:00Z",
+      "added_by": "seed"
+    }
+  },
+  {
+    "id": "resd",
+    "data": {
+      "repo": "salmankhaliq22/resd",
+      "blurb": "",
+      "archived": false,
+      "all_open_prs_wait": true,
+      "added_at": "2026-10-31T00:00:00Z",
+      "added_by": "seed"
+    }
+  },
+  {
+    "id": "oneblockatatime",
+    "data": {
+      "repo": "salmankhaliq22/oneblockatatime",
+      "blurb": "",
+      "archived": false,
+      "all_open_prs_wait": false,
+      "added_at": "2026-10-31T00:00:00Z",
+      "added_by": "seed"
+    }
+  }
+]
