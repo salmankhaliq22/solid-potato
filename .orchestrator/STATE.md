@@ -1,8 +1,8 @@
 # STATE (orchestrator-owned, at most 40 lines; written BEFORE any agent is spawned)
 
 task: T2   title: Dashboard v2 (control room: add/archive, project detail, live sessions)
-stage: spec
-owner_gate: waiting   last_approval: none for spec (3 critic rounds used; 2 small findings open)
+stage: build
+owner_gate: none   last_approval: spec approved in chat 2026-10-31
 
 | stage | agent | model | effort | spawned (UTC) | status | verdict | evidence path | round |
 |---|---|---|---|---|---|---|---|---|
@@ -17,6 +17,6 @@ reviewer: strongest
 pr_label: needs-owner   changed_lines: ~900 (new tool; over ~400, split not useful)
 spend: unknown, spawns 6 / per-task soft cap (docs/budget.md not filled in yet)
 
-next_step: owner approves spec docs/specs/fleet-control-room.md (with the 2 small fixes) or asks for changes
+next_step: builder: PR 1 (F1 builder, F2 control.html screens, F3 runbook + seed)
 blockers: push to solid-potato refused (403: Claude GitHub App has no access to solid-potato); no GitHub connector on claude.ai (dashboard is a snapshot, refreshed on request)
 resume: dashboard https://claude.ai/artifact/34vBev4QzzJYCR5746Grse ; refresh = docs/runbooks/update-fleet-dashboard.md

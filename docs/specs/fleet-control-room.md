@@ -1,6 +1,6 @@
 # Spec: Fleet control room (dashboard v2)
 
-Status: DRAFT. Merging this spec's PR is the owner's approval; no code starts before then.
+Status: APPROVED by the owner in chat on 2026-10-31 (decision log), with the two round-3 critic fixes applied.
 Decisions: `docs/decisions/D-20261031T002337-dashboard-v2-add-archive-projects-and-a-.md`, `D-20261031T002337-dashboard-merge-opens-the-pr-on-github.md`, `D-20261031T001035-dashboard-refreshes-only-on-request.md`. Milestone: Fleet v2 (issues filled in after approval).
 
 ## Plan
@@ -28,7 +28,7 @@ Approach: a new plain HTML artifact (not the Dashboard type, which cannot do cus
 - Header: status, last activity, and from `.orchestrator/STATE.md` when present: stage, next step, blockers.
 - Open PRs: title, labels, why waiting, age in days, size (+additions / −deletions; blank if unknown), description as plain text (4,000 characters, then "… Read on GitHub"). Buttons "Read on GitHub" and "Merge on GitHub" (both link to the PR page; Merge only for the owner). "Has conflicts" next to the button only when `mergeable_state` is `"dirty"`; nothing for `"unknown"` or any other value.
 - Open issues: title, labels, age.
-- When a list is capped, it says "showing 30 of N" (N from `open_pr_count` / `open_issue_count`).
+- When a list is capped, it says "showing 30 of N" for PRs and "showing 50 of N" for issues (N from `open_pr_count` / `open_issue_count`).
 - This week's activity: merged PRs and commits.
 - Live sessions: each Claude session for this repo with a status pill (Working, Blocked, Review ready, Completed, Failed), title, branch, last updated, and a link to `https://claude.ai/code/<session_id>`.
 - "Data as of" line, and an Archive button (owner only).
@@ -48,8 +48,8 @@ The builder stores `open_pr_count` and `open_issue_count` BEFORE capping; cards 
 
 ## Deliverables (two PRs)
 ### PR 1 = F1 + F2 + F3: builder, screens from snapshot, runbook
-**F1 builder.** `build_fleet.py` gains `--projects <export.json>` (an ArtifactData list of `projects`; archived and invalid docs skipped) and writes one `snapshot/<name>` doc per project plus `_meta`. It REQUIRES `body`, `additions`, `deletions`, `mergeable_state` from the per-PR dump (`pr_<number>.json`); if absent, those fields are blank, never guessed. Applies the caps and the 240 KB trim. Size: about 150 lines with tests.
-**Acceptance:** new tests in `tools/fleet/test_build_fleet.py` pass: archived skipped; invalid repo/name skipped; body truncation; counts stored before capping; a doc still too big after trims drops PR bodies, then fails naming the project while others are built; per-PR fields missing → blank; a worst case (200 PRs with 60,000-character bodies, 500 issues, 300 commits) stays under 240 KB; `waiting[]` matches v1 rows; `updated_at` set; old tests still pass.
+**F1 builder.** `build_fleet.py` gains `--projects <export.json>` (an ArtifactData list of `projects`; archived and invalid docs skipped) and writes one `snapshot/<name>` doc per project plus `_meta`. It REQUIRES `body`, `additions`, `deletions`, `mergeable_state` from the per-PR dump (`pr_<number>.json`); if absent, those fields are blank, never guessed. Applies the caps and the 240 KB trim. Connection: a project whose dump folder holds `not_connected.txt` (one line: the reason, written by the runbook when `add_repo` fails) gets `connected: false` and `not_connected_reason`, and the builder emits only those fields plus `updated_at` so the refresh merges them into the old snapshot (old lists kept); otherwise `connected: true`. Size: about 150 lines with tests.
+**Acceptance:** new tests in `tools/fleet/test_build_fleet.py` pass: archived skipped; invalid repo/name skipped; body truncation; counts stored before capping; a doc still too big after trims drops PR bodies, then fails naming the project while others are built; per-PR fields missing → blank; a worst case (200 PRs with 60,000-character bodies, 500 issues, 300 commits) stays under 240 KB; `waiting[]` matches v1 rows; `not_connected.txt` gives `connected: false` with the reason and no lists; `updated_at` set; old tests still pass.
 
 **F2 screens.** New `tools/fleet/control.html`: overview and project page, read from `snapshot/` only. Declares `db` (write rule `"owner"` on `projects/` and `snapshot/`) and `user`. Link building, sorting, truncation and "Stale"/"Has conflicts" logic live in pure functions tested with node.
 **Acceptance:** node tests pass, including: a `javascript:` URL and an `http://` URL get no href; "dirty" shows "Has conflicts" and "unknown" shows nothing; "Stale" when a doc's `updated_at` is older than `_meta.updated_at`. Page works with db empty (plain message, no blank screen).
