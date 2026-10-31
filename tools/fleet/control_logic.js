@@ -1,5 +1,6 @@
 // Pure logic for the Project Fleet control room (no DOM). Inlined into control.html by build_control.py.
 (function () {
+  'use strict';
   var NAME_RE = /^[a-z0-9-]+$/;
   var SAFE_PREFIXES = ['https://github.com/', 'https://claude.ai/code/'];
 
@@ -104,7 +105,23 @@
     return t;
   }
 
+  // db docs (snapshot.docs) -> project rows. d.data() is frozen: copy, never mutate it.
+  function projectRows(docs) {
+    return (docs || []).map(function (d) { return Object.assign({}, d.data(), { id: d.id }); });
+  }
+
+  // db docs of the snapshot collection -> {snaps: {name: doc}, meta}. Docs are kept as-is (read-only).
+  function snapshotState(docs) {
+    var snaps = {}, meta = null;
+    (docs || []).forEach(function (d) {
+      if (d.id === '_meta') meta = d.data() || null;
+      else snaps[d.id] = d.data() || {};
+    });
+    return { snaps: snaps, meta: meta };
+  }
+
   // Waiting rows across active projects, oldest first.
+  // "Ready to merge" rows (internal PRs) are left out on purpose: they wait on the orchestrator, not the owner.
   function waitingAll(cards) {
     var rows = [];
     (cards || []).forEach(function (c) {
@@ -119,7 +136,8 @@
     safeHref: safeHref, parseHash: parseHash, truncate: truncate, sortWaiting: sortWaiting,
     sortPrs: sortPrs, isStale: isStale, conflictsLabel: conflictsLabel, showingLabel: showingLabel,
     sizeLabel: sizeLabel, ageLabel: ageLabel, notConnectedText: notConnectedText,
-    groupProjects: groupProjects, totals: totals, waitingAll: waitingAll
+    groupProjects: groupProjects, totals: totals, waitingAll: waitingAll,
+    projectRows: projectRows, snapshotState: snapshotState
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = L;
   if (typeof window !== 'undefined') window.FleetLogic = L;

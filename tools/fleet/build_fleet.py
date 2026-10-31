@@ -113,6 +113,17 @@ def has_label(item_labels, wanted):
     return None
 
 
+def item_url(repo, kind, item):
+    """html_url, or the GitHub URL built from repo and number when it is missing."""
+    url = item.get("html_url")
+    if isinstance(url, str) and url:
+        return url
+    n = item.get("number")
+    if isinstance(n, int) and not isinstance(n, bool) and repo:
+        return "https://github.com/%s/%s/%d" % (repo, "pull" if kind == "PR" else "issues", n)
+    return ""
+
+
 def commit_info(c):
     commit = c.get("commit") or {}
     author = commit.get("author") or {}
@@ -204,7 +215,7 @@ def build(dumps, config, now, keep_raw=False, activity_cap=40):
                 waiting.append({
                     "key": "%s#%s" % (name, it.get("number")), "project": name, "kind": kind,
                     "number": it.get("number"), "title": clip(it.get("title", ""), 100),
-                    "url": it.get("html_url", ""), "label": wlab or "internal",
+                    "url": item_url(repo, kind, it), "label": wlab or "internal",
                     "why": "Needs your hands" if title_hitl else "Needs your OK to merge" if owner_merge else "Needs your decision" if wlab else "Ready to merge",
                     "age_days": days_between(now, created) if created else 0,
                     "_w": 0 if wlab else 1,
@@ -233,7 +244,7 @@ def build(dumps, config, now, keep_raw=False, activity_cap=40):
                 activity.append({
                     "key": "%s:pr:%s" % (name, m.get("number")), "project": name,
                     "kind": "Merged PR", "title": clip(m.get("title", ""), 100),
-                    "url": m.get("html_url", ""), "at": iso(dt), "_dt": dt,
+                    "url": item_url(repo, "PR", m), "at": iso(dt), "_dt": dt,
                 })
         for dt, msg, sha, url in cinfos:
             if not dt or dt < window:
@@ -276,24 +287,40 @@ def doc_size(doc):
     return len(json.dumps(doc, ensure_ascii=False).encode("utf-8"))
 
 
-def read_projects(path):
-    """Normalise an ArtifactData list ({id, data}) or bare objects into (docs, warnings).
-    Archived and invalid docs are skipped."""
+def read_list(path):
+    """Load an ArtifactData `list` output (bare array, {docs: [...]} wrapper or MCP text wrapper)
+    and return the list of doc objects."""
     with open(path, encoding="utf-8") as fh:
         raw = json.load(fh)
     if isinstance(raw, str):
         raw = json.loads(raw)
+    if isinstance(raw, list) and raw and all(isinstance(x, dict) and x.get("type") == "text" and "text" in x for x in raw):
+        raw = json.loads(raw[0]["text"])
     if isinstance(raw, dict):
         for key in ("docs", "documents", "items", "data"):
             if isinstance(raw.get(key), list):
                 raw = raw[key]
                 break
-    if isinstance(raw, list) and raw and all(isinstance(x, dict) and x.get("type") == "text" and "text" in x for x in raw):
-        raw = json.loads(raw[0]["text"])
-        if isinstance(raw, dict):
-            raw = raw.get("docs") or raw.get("documents") or raw.get("items") or []
+        else:
+            raw = []
+    return raw if isinstance(raw, list) else []
+
+
+def read_versions(path):
+    """Map doc id -> version from an ArtifactData `list` of the snapshot collection."""
+    out = {}
+    for x in read_list(path):
+        if isinstance(x, dict) and isinstance(x.get("id"), str) and x.get("version") is not None:
+            out[x["id"]] = x["version"]
+    return out
+
+
+def read_projects(path):
+    """Normalise an ArtifactData list ({id, data}) or bare objects into (docs, warnings).
+    Archived and invalid docs are skipped."""
+    raw = read_list(path)
     docs, warns, seen = [], [], set()
-    for x in raw if isinstance(raw, list) else []:
+    for x in raw:
         if not isinstance(x, dict):
             continue
         if isinstance(x.get("data"), dict) and "id" in x:
@@ -358,9 +385,22 @@ def fit_doc(doc):
     return False
 
 
-def build_snapshots(dumps, plist, config, now):
-    """Return (docs, errors). docs maps name -> (op, doc): op 'set' for a full doc,
-    'update' for a not-connected partial that must merge into the old snapshot."""
+def not_connected_doc(p, reason, stamp):
+    """Minimal snapshot for a not-connected project that has no snapshot doc yet."""
+    return {"project": p["name"], "name": p["name"], "repo": p["repo"], "blurb": p.get("blurb", ""),
+            "connected": False, "status": "Not connected", "not_connected_reason": reason, "updated_at": stamp,
+            "open_prs": [], "open_issues": [], "activity": [], "waiting": [],
+            "open_pr_count": 0, "open_issue_count": 0, "waiting_on_you": 0, "ready_internal": 0,
+            "in_progress": 0, "merged_7d": 0}
+
+
+def build_snapshots(dumps, plist, config, now, versions=None):
+    """Return (docs, errors, warnings). docs maps name -> (op, doc): op 'set' for a full doc
+    (or a minimal not-connected doc when no snapshot exists yet), 'update' for a not-connected
+    partial that merges into the existing snapshot (so its old lists stay).
+    versions maps existing snapshot doc ids to their version (from ArtifactData list)."""
+    versions = versions or {}
+    warnings = []
     stamp = iso(now)
     conf = dict(config, projects=[p for p in plist if os.path.isdir(os.path.join(dumps, p["name"]))
                                   and not os.path.isfile(os.path.join(dumps, p["name"], "not_connected.txt"))])
@@ -374,9 +414,14 @@ def build_snapshots(dumps, plist, config, now):
         if os.path.isfile(os.path.join(folder, "not_connected.txt")):
             reason = first_line(load_text(folder, "not_connected.txt")) or "Not connected"
         elif not os.path.isdir(folder):
-            reason = "No data was fetched for this project"
+            reason = "No data was fetched for this project (refresh skipped it)"
+            warnings.append("%s: no dump folder and no not_connected.txt; the refresh skipped it "
+                            "(written as not connected)" % name)
         if reason is not None:
-            docs[name] = ("update", {"updated_at": stamp, "connected": False, "not_connected_reason": reason})
+            if name in versions:
+                docs[name] = ("update", {"updated_at": stamp, "connected": False, "not_connected_reason": reason})
+            else:
+                docs[name] = ("set", not_connected_doc(p, reason, stamp))
             continue
         row = rows[name]
         prs, issues = row.pop("_prs"), row.pop("_issues")
@@ -391,7 +436,7 @@ def build_snapshots(dumps, plist, config, now):
             def blank(v):
                 return v if isinstance(v, (int, str)) and not isinstance(v, bool) else ""
             pr_rows.append({
-                "number": x.get("number"), "title": clip(x.get("title", ""), 200), "url": x.get("html_url", ""),
+                "number": x.get("number"), "title": clip(x.get("title", ""), 200), "url": item_url(p["repo"], "PR", x),
                 "labels": labels_of(x), "draft": bool(x.get("draft")), "created_at": iso(created),
                 "updated_at": iso(parse_ts(x.get("updated_at"))),
                 "age_days": days_between(now, created) if created else 0,
@@ -403,7 +448,7 @@ def build_snapshots(dumps, plist, config, now):
         for x in issues:
             created = parse_ts(x.get("created_at"))
             issue_rows.append({
-                "number": x.get("number"), "title": clip(x.get("title", ""), 200), "url": x.get("html_url", ""),
+                "number": x.get("number"), "title": clip(x.get("title", ""), 200), "url": item_url(p["repo"], "Issue", x),
                 "labels": labels_of(x), "created_at": iso(created),
                 "age_days": days_between(now, created) if created else 0,
                 "_w": 0 if x.get("number") in wait_issue else 1,
@@ -424,15 +469,24 @@ def build_snapshots(dumps, plist, config, now):
                           % (name, doc_size(doc), DOC_LIMIT))
             continue
         docs[name] = ("set", doc)
-    return docs, errors
+    return docs, errors, warnings
 
 
-def plan_batches(docs, meta):
+def write_entry(op, doc_id, data, versions):
+    """One ArtifactData batch write; existing docs carry if_version, new docs omit it."""
+    w = {"op": op, "collection": "snapshot", "doc_id": doc_id, "data": data}
+    if doc_id in versions:
+        w["if_version"] = versions[doc_id]
+    return w
+
+
+def plan_batches(docs, meta, versions=None):
     """Group writes into batches under BATCH_LIMIT bytes; _meta alone in the last one."""
+    versions = versions or {}
     batches, cur, size = [], [], 0
     for name in sorted(docs):
         op, doc = docs[name]
-        w = {"action": op, "collection": "snapshot", "doc_id": name, "data": doc}
+        w = write_entry(op, name, doc, versions)
         n = doc_size(w)
         if cur and (size + n > BATCH_LIMIT or len(cur) >= BATCH_WRITES):
             batches.append({"bytes": size, "writes": cur})
@@ -441,7 +495,7 @@ def plan_batches(docs, meta):
         size += n
     if cur:
         batches.append({"bytes": size, "writes": cur})
-    w = {"action": "set", "collection": "snapshot", "doc_id": "_meta", "data": meta}
+    w = write_entry("set", "_meta", meta, versions)
     batches.append({"bytes": doc_size(w), "writes": [w]})
     return batches
 
@@ -457,16 +511,19 @@ def main_v2(a, config, now):
     plist, warns = read_projects(a.projects)
     for w in warns:
         print("warning: " + w, file=sys.stderr)
-    docs, errors = build_snapshots(a.dumps, plist, config, now)
+    versions = read_versions(a.versions)
+    docs, errors, skipped = build_snapshots(a.dumps, plist, config, now, versions)
     meta = {"updated_at": iso(now)}
     for name, (op, doc) in docs.items():
         write_json(os.path.join(a.out, "snapshot", name + ".json"), doc)
         print("snapshot/%s: %s, %d bytes" % (name, op, doc_size(doc)))
     write_json(os.path.join(a.out, "snapshot", "_meta.json"), meta)
-    write_json(os.path.join(a.out, "batches.json"), {"batches": plan_batches(docs, meta)})
+    write_json(os.path.join(a.out, "batches.json"), {"batches": plan_batches(docs, meta, versions)})
+    for w in skipped:
+        print("warning: " + w, file=sys.stderr)
     for e in errors:
         print("error: " + e, file=sys.stderr)
-    return 1 if errors else 0
+    return 1 if errors or skipped else 0
 
 
 def main(argv=None):
@@ -474,6 +531,8 @@ def main(argv=None):
     ap.add_argument("--dumps", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--projects", help="ArtifactData list of the projects collection (v2 snapshot output)")
+    ap.add_argument("--versions", help="ArtifactData list of the snapshot collection (ids + versions); "
+                    "required with --projects")
     ap.add_argument("--now")
     ap.add_argument("--config", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json"))
     a = ap.parse_args(argv)
@@ -482,6 +541,9 @@ def main(argv=None):
     now = parse_ts(a.now) if a.now else datetime.now(timezone.utc)
     if now is None:
         ap.error("bad --now")
+    if a.projects and not a.versions:
+        ap.error("--versions is required with --projects (ArtifactData list of the snapshot collection; "
+                 "save [] if it is empty)")
     if a.projects:
         return main_v2(a, config, now)
     projects, waiting, activity = build(a.dumps, config, now)

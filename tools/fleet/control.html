@@ -266,13 +266,12 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px
       if (!db) { render(); return; }
       var fail = function () { state.error = 'Could not read the shared database. Reload the page to retry.'; render(); };
       db.collection('projects').onSnapshot(function (snap) {
-        state.projects = snap.docs.map(function (d) { var x = d.data() || {}; x.id = d.id; return x; });
+        state.projects = L.projectRows(snap.docs);
         render();
       }, fail);
       db.collection('snapshot').onSnapshot(function (snap) {
-        var m = {}, meta = null;
-        snap.docs.forEach(function (d) { if (d.id === '_meta') meta = d.data() || null; else m[d.id] = d.data() || {}; });
-        state.snaps = m; state.meta = meta;
+        var st = L.snapshotState(snap.docs);
+        state.snaps = st.snaps; state.meta = st.meta;
         render();
       }, fail);
     }, function () { state.db = null; render(); });

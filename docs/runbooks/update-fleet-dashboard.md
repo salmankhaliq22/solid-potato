@@ -36,17 +36,21 @@ Create `<S>/dumps/<name>/` and save, using the GitHub MCP tools:
 - `commits.json`: `list_commits` perPage=30 on the default branch. Keep sha, html_url, commit (message and author date). Newest first.
 - `state.md`: `get_file_contents` for `.orchestrator/STATE.md`, only if it exists.
 
-Issues or PRs with `[HITL]` in the title count as waiting on the owner. A project with no dump folder and no `not_connected.txt` is treated as not connected.
+Issues or PRs with `[HITL]` in the title count as waiting on the owner. A project with no dump folder and no `not_connected.txt` is a mistake in the refresh: the builder names it on stderr, writes it as not connected ("No data was fetched for this project (refresh skipped it)"), still builds the others, and exits 1. Report it to the owner.
 
-## 5. Build
+## 5. List the current snapshot, then build
 
-    python tools/fleet/build_fleet.py --dumps <S>/dumps --projects <S>/projects.json --out <S>/out
+Writes to an existing doc must carry its current version, so first run `ArtifactData` `list` on collection `snapshot` (every page, if the listing is paged) and save the output as `<S>/versions.json` (each doc's `id` and `version`; save `[]` if the collection is empty). Do this right before building, so the versions are fresh.
 
-(Optional: `--now <ISO>`, `--config <path>`.) The builder prints each doc and its size, writes `<S>/out/snapshot/<name>.json` and `snapshot/_meta.json`, and writes `<S>/out/batches.json`. Each doc is capped (30 PRs, 50 issues, 40 activity rows, PR bodies 4,000 characters) and trimmed under 240 KB. A project whose doc cannot fit is named on stderr, nothing is written for it, the others are built, and the exit code is 1. Report such a project to the owner.
+    python tools/fleet/build_fleet.py --dumps <S>/dumps --projects <S>/projects.json --versions <S>/versions.json --out <S>/out
+
+`--versions` is required with `--projects`. (Optional: `--now <ISO>`, `--config <path>`.) The builder prints each doc and its size, writes `<S>/out/snapshot/<name>.json` and `snapshot/_meta.json`, and writes `<S>/out/batches.json`. Each doc is capped (30 PRs, 50 issues, 40 activity rows, PR bodies 4,000 characters) and trimmed under 240 KB. A project whose doc cannot fit is named on stderr, nothing is written for it, the others are built, and the exit code is 1. Report such a project to the owner.
 
 ## 6. Write the snapshot to the page database
 
-`<S>/out/batches.json` is `{"batches": [{"bytes", "writes": [...]}]}`. Each write is already shaped for `ArtifactData` `batch` (`action`, `collection`, `doc_id`, `data`). Send the batches IN ORDER, one `ArtifactData` `batch` call per entry (at most 50 writes and 1 MiB per batch; the plan keeps each under about 900 KB). The last batch holds `snapshot/_meta` alone: write it last, so a half-finished refresh shows "Stale" rather than fresh. Not-connected projects use `update` (merge), so their old lists stay.
+`<S>/out/batches.json` is `{"batches": [{"bytes", "writes": [...]}]}`. Each write is already shaped for `ArtifactData` `batch`: `op`, `collection`, `doc_id`, `data`, plus `if_version` for a doc that already exists (taken from `<S>/versions.json`); new docs have no `if_version`. Pass each entry's `writes` array unchanged as the `batch` call's `writes`; do not add `bytes` or other keys. Send the batches IN ORDER, one `ArtifactData` `batch` call per entry (at most 50 writes and 1 MiB per batch; the plan keeps each under about 900 KB). The last batch holds `snapshot/_meta` alone: write it last, so a half-finished refresh shows "Stale" rather than fresh. A not-connected project with an existing snapshot uses `update` (merge), so its old lists stay; one with no snapshot yet gets a `set` of a minimal not-connected doc (empty lists, counts 0).
+
+If a write is refused because a version changed (someone or something wrote in between), do not retry the same batch: list `snapshot` again, rebuild from step 5, and send the batches again.
 
 ## 7. Check and tell the owner
 

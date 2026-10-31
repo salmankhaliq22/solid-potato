@@ -208,7 +208,7 @@ PLIST = [{"name": "alpha", "repo": "o/alpha", "blurb": "A", "all_open_prs_wait":
 
 
 class Snapshots(unittest.TestCase):
-    def snap(self, files, plist=PLIST, cfg=CFG):
+    def snap(self, files, plist=PLIST, cfg=CFG, versions=None, full=False):
         with tempfile.TemporaryDirectory() as d:
             for proj, fs in files.items():
                 os.makedirs(os.path.join(d, proj))
@@ -218,7 +218,8 @@ class Snapshots(unittest.TestCase):
             import contextlib
             import io
             with contextlib.redirect_stderr(io.StringIO()):
-                return bf.build_snapshots(d, plist, cfg, bf.parse_ts(NOW))
+                docs, errs, warns = bf.build_snapshots(d, plist, cfg, bf.parse_ts(NOW), versions)
+            return (docs, errs, warns) if full else (docs, errs)
 
     def test_basic_doc_counts_before_cap_and_pr_fields(self):
         prs = [pr(i, ["needs-owner"] if i == 1 else None) for i in range(1, 36)]
@@ -262,14 +263,49 @@ class Snapshots(unittest.TestCase):
         self.assertEqual(len(docs["alpha"][1]["waiting"]), 2)
 
     def test_not_connected_partial(self):
-        docs, errs = self.snap({"alpha": {"not_connected.txt": "no access\nsecond"}, "beta": {}})
+        docs, errs = self.snap({"alpha": {"not_connected.txt": "no access\nsecond"}, "beta": {}},
+                               versions={"alpha": 3})
         op, d = docs["alpha"]
         self.assertEqual(op, "update")
         self.assertEqual(d, {"updated_at": NOW, "connected": False, "not_connected_reason": "no access"})
 
-    def test_missing_folder_is_not_connected(self):
-        docs, _ = self.snap({"alpha": {}})
-        self.assertFalse(docs["beta"][1]["connected"])
+    def test_not_connected_without_existing_doc_is_full_set(self):
+        docs, errs = self.snap({"alpha": {"not_connected.txt": "no access"}, "beta": {}}, versions={})
+        op, d = docs["alpha"]
+        self.assertEqual(op, "set")
+        self.assertEqual((d["name"], d["repo"], d["connected"], d["not_connected_reason"], d["updated_at"]),
+                         ("alpha", "o/alpha", False, "no access", NOW))
+        for k in ("open_prs", "open_issues", "activity", "waiting"):
+            self.assertEqual(d[k], [])
+        for k in ("open_pr_count", "open_issue_count", "waiting_on_you", "merged_7d"):
+            self.assertEqual(d[k], 0)
+
+    def test_missing_folder_is_not_connected_and_warns(self):
+        docs, errs, warns = self.snap({"alpha": {}}, full=True)
+        op, d = docs["beta"]
+        self.assertEqual(op, "set")
+        self.assertFalse(d["connected"])
+        self.assertEqual(d["not_connected_reason"], "No data was fetched for this project (refresh skipped it)")
+        self.assertEqual(errs, [])
+        self.assertEqual(len(warns), 1)
+        self.assertIn("beta", warns[0])
+        self.assertEqual(docs["alpha"][0], "set")
+
+    def test_url_fallback(self):
+        p = pr(1, ["needs-owner"])
+        del p["html_url"]
+        iss = {"number": 7, "title": "I", "labels": ["needs-owner"], "created_at": "2026-10-20T12:00:00Z"}
+        m = pr(2, merged_at="2026-10-30T12:00:00Z")
+        del m["html_url"]
+        docs, _ = self.snap({"alpha": {"prs.json": [p], "issues.json": [iss], "merged.json": [m]}, "beta": {}})
+        d = docs["alpha"][1]
+        self.assertEqual(d["open_prs"][0]["url"], "https://github.com/o/alpha/pull/1")
+        self.assertEqual(d["open_issues"][0]["url"], "https://github.com/o/alpha/issues/7")
+        self.assertEqual({w["number"]: w["url"] for w in d["waiting"]},
+                         {1: "https://github.com/o/alpha/pull/1", 7: "https://github.com/o/alpha/issues/7"})
+        self.assertEqual(d["activity"][0]["url"], "https://github.com/o/alpha/pull/2")
+        self.assertEqual(bf.item_url("o/r", "PR", {"html_url": "https://github.com/x"}), "https://github.com/x")
+        self.assertEqual(bf.item_url("o/r", "Issue", {}), "")
 
     def test_worst_case_under_limit(self):
         prs = [pr(i, ["needs-owner"]) for i in range(1, 201)]
@@ -326,10 +362,60 @@ class Snapshots(unittest.TestCase):
     def test_batches_meta_last_and_size(self):
         docs = {"n%d" % i: ("set", {"x": "y" * 300000}) for i in range(7)}
         bs = bf.plan_batches(docs, {"updated_at": NOW})
+        self.assertTrue(all(set(w) == {"op", "collection", "doc_id", "data"} for b in bs for w in b["writes"]))
         self.assertEqual(bs[-1]["writes"][0]["doc_id"], "_meta")
         self.assertEqual(len(bs[-1]["writes"]), 1)
         self.assertTrue(all(b["bytes"] < 1024 * 1024 for b in bs))
         self.assertEqual(sum(len(b["writes"]) for b in bs[:-1]), 7)
+
+    def test_batches_if_version(self):
+        docs = {"old": ("update", {"connected": False}), "new": ("set", {"x": 1})}
+        bs = bf.plan_batches(docs, {"updated_at": NOW}, {"old": 4, "_meta": 9, "gone": 1})
+        ws = {w["doc_id"]: w for b in bs for w in b["writes"]}
+        self.assertEqual(ws["old"], {"op": "update", "collection": "snapshot", "doc_id": "old",
+                                     "data": {"connected": False}, "if_version": 4})
+        self.assertNotIn("if_version", ws["new"])
+        self.assertEqual(ws["new"]["op"], "set")
+        self.assertEqual(ws["_meta"]["if_version"], 9)
+        self.assertNotIn("gone", ws)
+
+    def test_read_versions_shapes(self):
+        rows = [{"id": "alpha", "data": {"x": 1}, "version": 5}, {"id": "_meta", "data": {}, "version": "v2"},
+                {"id": "noversion", "data": {}}, "junk"]
+        for payload in (rows, {"docs": rows}, [{"type": "text", "text": json.dumps({"docs": rows})}], []):
+            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+                json.dump(payload, fh)
+            got = bf.read_versions(fh.name)
+            os.unlink(fh.name)
+            self.assertEqual(got, {} if payload == [] else {"alpha": 5, "_meta": "v2"})
+
+    def test_main_requires_versions(self):
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            bf.main(["--dumps", "d", "--out", "o", "--projects", "p.json"])
+
+    def test_main_missing_dump_exits_1_and_uses_versions(self):
+        with tempfile.TemporaryDirectory() as t:
+            dumps, out = os.path.join(t, "d"), os.path.join(t, "o")
+            os.makedirs(os.path.join(dumps, "alpha"))
+            proj, ver = os.path.join(t, "p.json"), os.path.join(t, "v.json")
+            json.dump([{"id": "alpha", "data": {"repo": "o/alpha"}}, {"id": "beta", "data": {"repo": "o/beta"}}],
+                      open(proj, "w"))
+            json.dump([{"id": "alpha", "data": {}, "version": 2}], open(ver, "w"))
+            import contextlib
+            import io
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                rc = bf.main(["--dumps", dumps, "--out", out, "--projects", proj, "--versions", ver, "--now", NOW])
+            self.assertEqual(rc, 1)
+            self.assertIn("beta", err.getvalue())
+            ws = {w["doc_id"]: w for b in json.load(open(os.path.join(out, "batches.json")))["batches"]
+                  for w in b["writes"]}
+            self.assertEqual(ws["alpha"]["if_version"], 2)
+            self.assertNotIn("if_version", ws["beta"])
+            self.assertEqual(ws["beta"]["op"], "set")
+            self.assertFalse(ws["beta"]["data"]["connected"])
 
     def test_main_writes_files(self):
         with tempfile.TemporaryDirectory() as t:
@@ -337,10 +423,12 @@ class Snapshots(unittest.TestCase):
             os.makedirs(os.path.join(dumps, "alpha"))
             proj = os.path.join(t, "p.json")
             json.dump([{"id": "alpha", "data": {"repo": "o/alpha"}}], open(proj, "w"))
+            ver = os.path.join(t, "v.json")
+            json.dump([], open(ver, "w"))
             import contextlib
             import io
             with contextlib.redirect_stdout(io.StringIO()):
-                rc = bf.main(["--dumps", dumps, "--out", out, "--projects", proj, "--now", NOW])
+                rc = bf.main(["--dumps", dumps, "--out", out, "--projects", proj, "--versions", ver, "--now", NOW])
             self.assertEqual(rc, 0)
             self.assertTrue(os.path.isfile(os.path.join(out, "snapshot", "alpha.json")))
             self.assertEqual(json.load(open(os.path.join(out, "snapshot", "_meta.json"))), {"updated_at": NOW})

@@ -86,6 +86,34 @@ t('grouping and totals', () => {
   assert.strictEqual(nc.active[0].notConnected, true);
   assert.strictEqual(nc.active[0].stale, false);
 });
+function deepFreeze(o) {
+  if (o && typeof o === 'object') { Object.values(o).forEach(deepFreeze); Object.freeze(o); }
+  return o;
+}
+function fdoc(id, data) { return Object.freeze({ id: id, data: () => data }); }
+t('frozen db docs', () => {
+  const pData = deepFreeze({ repo: 'o/a', blurb: 'x' });
+  const rows = L.projectRows(Object.freeze([fdoc('a', pData), fdoc('b', undefined)]));
+  assert.deepStrictEqual(rows, [{ repo: 'o/a', blurb: 'x', id: 'a' }, { id: 'b' }]);
+  assert.strictEqual(pData.id, undefined);
+  const meta = deepFreeze({ updated_at: '2026-10-31T12:00:00Z' });
+  const snapA = deepFreeze({
+    updated_at: '2026-10-30T00:00:00Z', waiting_on_you: 1, open_pr_count: 2, open_issue_count: 0, merged_7d: 0,
+    open_prs: [{ number: 2, age_days: 1 }, { number: 1, age_days: 5, why: 'x' }],
+    waiting: [{ key: 'a#2', age_days: 1, why: 'Needs your decision' }, { key: 'a#1', age_days: 5, why: 'Needs your decision' }]
+  });
+  const st = L.snapshotState(Object.freeze([fdoc('_meta', meta), fdoc('a', snapA), fdoc('z', null)]));
+  assert.strictEqual(st.meta, meta);
+  assert.deepStrictEqual(st.snaps.z, {});
+  // the whole read path runs on frozen data without throwing (control_logic.js is strict mode)
+  const g = L.groupProjects(Object.freeze(rows.map(r => Object.freeze(r))), st.snaps, st.meta);
+  assert.strictEqual(g.active[0].stale, true);
+  assert.deepStrictEqual(L.waitingAll(g.active).map(w => w.key), ['a#1', 'a#2']);
+  assert.deepStrictEqual(L.sortPrs(snapA.open_prs).map(p => p.number), [1, 2]);
+  assert.strictEqual(L.totals(g.active).openPrs, 2);
+  assert.deepStrictEqual(L.projectRows(undefined), []);
+  assert.deepStrictEqual(L.snapshotState(undefined), { snaps: {}, meta: null });
+});
 t('empty', () => {
   const g = L.groupProjects([], {}, null);
   assert.deepStrictEqual(g, { active: [], archived: [] });
